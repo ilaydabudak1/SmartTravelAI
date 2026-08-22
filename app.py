@@ -13,7 +13,8 @@ from agents import (
     MBTIAgent, ACOAgent, UlasimAgent, RestaurantAgent,
     MaliyetAgent, PlanAgent, AgentBus,
     register_user, login_user, get_user_profile,
-    update_user_mbti, save_travel_history,
+    update_user_mbti, save_travel_history, delete_travel_plan,
+    invalidate_session,
     maliyet_gecmisi_oku,
     _gemini_generate,
 )
@@ -192,9 +193,9 @@ _defaults = {
     "travel_history": [], "last_plan": None,
     "last_aco": None, "last_t_data": None,
     "maliyet_result": None, "current_tab": 0,
-    "_plan_kopya_goster": False,
     "_profil_yuklendi": False,
-    "_agent_bus": None, "_plan_created_at": None,
+    "_agent_bus": None,
+    "_session_token": None,
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -418,6 +419,67 @@ def page_header(title, subtitle=""):
     )
 
 
+def _masaustu_klasoru() -> str:
+    """Kullanıcının gerçek Masaüstü klasörünü döndürür — OneDrive ile yönlendirilmiş
+    masaüstlerini de (bu makinedeki gibi) doğru tespit eder."""
+    home = os.path.expanduser("~")
+    for aday in (os.path.join(home, "OneDrive", "Desktop"), os.path.join(home, "Desktop")):
+        if os.path.isdir(aday):
+            return aday
+    return home
+
+
+def _plan_pdf_bytes(baslik: str, alt_baslik: str, gun_metinleri: list) -> bytes:
+    """Plan metnini basit, okunabilir bir PDF'e dönüştürür. Türkçe karakterler için
+    (fpdf2'nin çekirdek fontları desteklemiyor) sistemdeki bir Unicode TTF kullanılır,
+    bulunamazsa çekirdek fonta düşer."""
+    from fpdf import FPDF
+    from fpdf.enums import XPos, YPos
+
+    font_yolu = None
+    for aday in (r"C:\Windows\Fonts\segoeui.ttf", r"C:\Windows\Fonts\arial.ttf"):
+        if os.path.exists(aday):
+            font_yolu = aday
+            break
+
+    pdf = FPDF(format="A4")
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.add_page()
+
+    if font_yolu:
+        pdf.add_font("govde", "", font_yolu)
+        font_adi = "govde"
+    else:
+        font_adi = "helvetica"
+
+    # multi_cell varsayılan olarak imleci satır sonunda bırakır (sol kenara
+    # dönmez) — new_x/new_y açıkça verilmezse bir sonraki multi_cell çağrısı
+    # kalan (neredeyse sıfır) genişliğe sığmaya çalışıp FPDFException fırlatır.
+    def _satir(metin, boy):
+        pdf.multi_cell(0, boy, metin, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    pdf.set_font(font_adi, size=18)
+    pdf.set_text_color(30, 30, 30)
+    _satir(baslik, 10)
+    pdf.set_font(font_adi, size=11)
+    pdf.set_text_color(90, 90, 90)
+    _satir(alt_baslik, 7)
+    pdf.ln(4)
+
+    for metin in gun_metinleri:
+        if not metin.strip():
+            continue
+        pdf.set_draw_color(224, 224, 224)
+        pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + 174, pdf.get_y())
+        pdf.ln(3)
+        pdf.set_font(font_adi, size=10.5)
+        pdf.set_text_color(20, 20, 20)
+        _satir(metin, 6)
+        pdf.ln(2)
+
+    return bytes(pdf.output())
+
+
 def aco_optimized_route(aco_res: dict) -> list:
     if not aco_res:
         return []
@@ -529,10 +591,11 @@ def auth_screen():
                 username = st.text_input("Kullanıcı Adı", placeholder="kullaniciadi")
                 password = st.text_input("Şifre", type="password", placeholder="••••••")
                 if st.form_submit_button("Giriş Yap", use_container_width=True):
-                    ok, msg = login_user(username.strip(), password)
+                    ok, msg, token = login_user(username.strip(), password)
                     if ok:
-                        st.session_state.logged_in = True
-                        st.session_state.username  = username.strip()
+                        st.session_state.logged_in    = True
+                        st.session_state.username     = username.strip()
+                        st.session_state._session_token = token
                         profile = get_user_profile(username.strip())
                         saved_mbti = profile.get("mbti_type", "")
                         if saved_mbti:
@@ -721,6 +784,7 @@ with st.sidebar:
     # Çıkış butonu
     st.markdown('<div style="padding:0 8px 16px">', unsafe_allow_html=True)
     if st.button("Çıkış Yap", key="logout_btn", use_container_width=True):
+        invalidate_session(st.session_state.get("_session_token"))
         for k in list(st.session_state.keys()):
             del st.session_state[k]
         st.rerun()
@@ -1322,7 +1386,6 @@ elif cur == 1:
                     st.session_state.last_aco       = aco_res
                     st.session_state.last_t_data    = t_data
                     st.session_state.maliyet_result = mal_res
-                    st.session_state._plan_created_at = time.time()
 
                     try:
                         import re as _re_h
@@ -1354,6 +1417,7 @@ elif cur == 1:
                             "mbti_type":      t_data["mbti_type"],
                             "estimated_cost": mal_res.get("ozel_plan", {}).get("toplam", 0),
                             "plan_ozeti":     _ozet_txt,
+                            "full_plan":      plan,
                         })
                     except Exception:
                         pass
@@ -1409,92 +1473,6 @@ elif cur == 2:
         days2       = plan.get("duration_days", 1)
         cost2       = float(plan.get("estimated_cost") or 0)
         html_report = plan.get("html_report") or plan.get("plan_metni") or plan.get("transport_details", "")
-
-        # ── Ajan otonomluk paneli ─────────────────────────────────────────────
-        # Tek fragment: kısmi rerun'lar (run_every) yalnızca bu bloğu yeniler,
-        # bu yüzden çip + günlük + otonom fiyat izleyici hep birlikte tutarlı kalsın
-        # diye tek bir fragment fonksiyonunun içinde toplanır. Sekmeden çıkılınca
-        # bu dal hiç çalışmadığından zamanlayıcı da kendiliğinden durur.
-        @st.fragment(run_every=20)
-        def _agent_autonomy_panel(t_data_snapshot):
-            bus = st.session_state["_agent_bus"]
-
-            # Tier-B: kullanıcı tıklamadan — MaliyetAgent zamanla oluşan simüle
-            # fiyat sürüklenmesini kendiliğinden algılayıp planı günceller.
-            created_at = st.session_state.get("_plan_created_at") or time.time()
-            elapsed = time.time() - created_at
-            seed = hash(st.session_state.get("username", "")) % 1000
-            drift = 0.03 * math.sin((elapsed + seed) / 45.0)
-            if abs(drift) > 0.015:
-                MaliyetAgent().reprice(bus, t_data_snapshot, drift)
-                st.toast(
-                    f"Maliyet Ajanı fiyat değişikliğini fark etti ve planı güncelledi ({drift*100:+.1f}%)",
-                    icon="🤖",
-                )
-
-            agents_meta = [
-                ("aco", "🐜 Rota", "aco.route"),
-                ("ulasim", "🚌 Ulaşım", "ulasim.transport"),
-                ("restoran", "🍽️ Restoran", "restoran.recommendations"),
-                ("maliyet", "💰 Maliyet", "maliyet.cost"),
-            ]
-            chip_html = ""
-            for _sender, _label, _mtype in agents_meta:
-                _payload = bus.latest(_mtype)
-                _active  = _payload is not None
-                _reused  = bool(_payload and isinstance(_payload, dict) and _payload.get("reused"))
-                _renk    = "#9eaa8f" if _active else "#d1d5db"
-                _durum   = "aktif · yeniden kullanıldı" if _reused else ("aktif" if _active else "pasif")
-                chip_html += f"""<div style="display:inline-flex;align-items:center;gap:6px;background:white;
-                    border:1px solid #e5e7eb;border-radius:99px;padding:5px 12px;margin:3px 4px 3px 0;font-size:11px">
-                  <span style="width:7px;height:7px;border-radius:50%;background:{_renk};display:inline-block"></span>
-                  <span style="font-weight:600;color:#374151">{_label}</span>
-                  <span style="color:#9ca3af">{_durum}</span>
-                </div>"""
-
-            _guncel_maliyet = bus.latest("maliyet.cost") or {}
-            _guncel_tl = _guncel_maliyet.get("ozel_plan", {}).get("toplam")
-            _drift_note = _guncel_maliyet.get("ai_drift_note", "")
-            _maliyet_satiri = (
-                f"""<div style="margin-top:10px;padding-top:10px;border-top:1px solid #e5e7eb;
-                    font-size:12px;color:#374151">
-                  Güncel tahmini maliyet: <strong>{_guncel_tl:,.0f} TL</strong>
-                  {f'<span style="color:#9ca3af"> — {_drift_note}</span>' if _drift_note else ''}
-                </div>""" if _guncel_tl else ""
-            )
-
-            st.markdown(f"""<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:14px;
-                padding:14px 18px;margin-bottom:16px">
-              <div style="font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;
-                          letter-spacing:0.8px;margin-bottom:8px">🤖 Ajan Durumu</div>
-              <div>{chip_html}</div>
-              {_maliyet_satiri}
-            </div>""", unsafe_allow_html=True)
-
-            with st.expander("🤖 Ajan İletişim Günlüğü"):
-                log = bus.log()
-                if not log:
-                    st.caption("Henüz mesaj yok.")
-                else:
-                    _ozet_fn = {
-                        "aco.route": lambda p: f"{len(p.get('optimized_route', []))} durak, {p.get('tahmini_toplam_mesafe_km', '?')} km",
-                        "ulasim.transport": lambda p: (p.get("ai_suggestions", "") or "")[:70],
-                        "restoran.recommendations": lambda p: f"{len(p.get('recommendations', []))} öneri",
-                        "restoran.schedule": lambda p: f"{len(p)} günlük program" if isinstance(p, list) else "",
-                        "maliyet.cost": lambda p: f"{p.get('ozel_plan', {}).get('toplam', '?')} TL",
-                        "maliyet.cost_update": lambda p: f"{p.get('ozel_plan', {}).get('toplam', '?')} TL — otonom güncelleme",
-                    }
-                    for msg in log[-30:]:
-                        _zaman = datetime.fromtimestamp(msg.ts).strftime("%H:%M:%S")
-                        try:
-                            _ozet = _ozet_fn.get(msg.type, lambda p: "")(msg.payload)
-                        except Exception:
-                            _ozet = ""
-                        _reused_tag = (" · ♻️ yeniden kullanıldı"
-                                       if isinstance(msg.payload, dict) and msg.payload.get("reused") else "")
-                        st.caption(f"`{_zaman}` **{msg.sender}** → `{msg.type}` — {_ozet}{_reused_tag}")
-
-        _agent_autonomy_panel(t_d2)
 
         # ── Landmark carousel — base64 (kota hatası olsa da çalışır) ─────────
         _WIKI_HDR = {"User-Agent": "SmartTravelAI/1.0 (edu; ilaydanudak@icloud.com)"}
@@ -1794,34 +1772,32 @@ elif cur == 2:
             parcalar    = _re.split(r'(?=<div[^>]*class=["\']gun-baslik["\'])', body_only)
             gun_parcalari = [p for p in parcalar if "gun-baslik" in p]
 
-            # ── Araç çubuğu: kopyala + indir butonları ───────────────────────
+            # ── Araç çubuğu: indir butonu (PDF, doğrudan masaüstüne) ─────────
             plain_text = _re.sub(r'<[^>]+>', ' ', body_only)
             plain_text = _re.sub(r'[ \t]{2,}', ' ', plain_text).strip()
-            col_kpy, col_ind, col_sp = st.columns([1.1, 1.1, 5])
-            with col_kpy:
-                if st.button("📋 Planı Kopyala", key="plan_kopyala", use_container_width=True):
-                    st.session_state["_plan_kopya_goster"] = True
+            col_ind, col_sp = st.columns([1.3, 4.7])
             with col_ind:
-                st.download_button(
-                    label="⬇ Planı İndir",
-                    data=plain_text.encode("utf-8"),
-                    file_name=f"{dest_up.lower().replace(' ','_')}_plan.txt",
-                    mime="text/plain",
-                    key="plan_indir",
-                    use_container_width=True,
-                )
-            if st.session_state.get("_plan_kopya_goster"):
-                st.html(f"""
-<textarea id="_kpy_ta" style="position:absolute;left:-9999px">{plain_text[:4000]}</textarea>
-<script>
-(function(){{
-  var ta = document.getElementById('_kpy_ta');
-  ta.select(); document.execCommand('copy');
-  var b = document.querySelector('[data-testid="stButton"] button[kind="secondary"]');
-}})();
-</script>""")
-                st.success("Plan panoya kopyalandı!", icon="✅")
-                st.session_state["_plan_kopya_goster"] = False
+                if st.button("⬇ Planı İndir", key="plan_indir", use_container_width=True, type="primary"):
+                    try:
+                        kaynaklar = gun_parcalari if len(gun_parcalari) > 1 else [body_only]
+                        gun_metinleri = []
+                        for parca in kaynaklar:
+                            t = _re.sub(r'<[^>]+>', ' ', parca)
+                            t = _re.sub(r'[ \t]{2,}', ' ', t).strip()
+                            if t:
+                                gun_metinleri.append(t)
+                        pdf_bytes = _plan_pdf_bytes(
+                            f"{dest_up} Seyahat Planı",
+                            f"{bas2} – {bit2}  ·  {kisi2} kişi  ·  {days2} gün  ·  {cost2:,.0f} TL",
+                            gun_metinleri,
+                        )
+                        dosya_adi = f"{dest_up.lower().replace(' ', '_')}_plan.pdf"
+                        hedef_yol = os.path.join(_masaustu_klasoru(), dosya_adi)
+                        with open(hedef_yol, "wb") as f:
+                            f.write(pdf_bytes)
+                        st.success(f"Plan masaüstüne kaydedildi: {dosya_adi}", icon="✅")
+                    except Exception as e:
+                        st.error(f"Plan indirilemedi: {e}")
 
             if len(gun_parcalari) > 1:
                 gun_isimleri = []
@@ -2244,6 +2220,30 @@ elif cur == 4:
   <div style="display:flex;gap:6px;flex-wrap:wrap">{chips_html}</div>
 </div>""", unsafe_allow_html=True)
 
+            col_gor, col_sil, col_bos = st.columns([1.7, 0.7, 3.6])
+            with col_gor:
+                if record.get("full_plan"):
+                    if st.button("🔍 Planı Görüntüle", key=f"gecmis_goruntule_{h_idx}"):
+                        st.session_state.last_plan = record["full_plan"]
+                        st.session_state.last_t_data = {
+                            "destination":      record.get("destination", ""),
+                            "start_date":       start,
+                            "end_date":         end,
+                            "duration_days":    dur,
+                            "group_size":       kisi,
+                            "transport":        trans,
+                            "butce_kategorisi": budget,
+                            "mbti_type":        mbti,
+                        }
+                        go_tab(2)
+                        st.rerun()
+                else:
+                    st.caption("Tam görünüm yok (eski kayıt)")
+            with col_sil:
+                if st.button("🗑️", key=f"gecmis_sil_{h_idx}", help="Bu planı sil"):
+                    if record.get("_id") is not None:
+                        delete_travel_plan(st.session_state.username, record["_id"])
+                    st.rerun()
 
     kayitlar = [k for k in maliyet_gecmisi_oku() if k.get("kullanici") == st.session_state.username]
     if kayitlar:

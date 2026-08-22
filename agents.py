@@ -12,6 +12,16 @@ import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from db import (
+    init_db,
+    register_user, login_user, get_user_profile, update_user_mbti,
+    save_travel_history, get_travel_plans, delete_travel_plan,
+    create_session, validate_session, invalidate_session,
+    maliyet_kaydet, maliyet_gecmisi_oku,
+)
+
+init_db()
+
 try:
     from google import genai as _genai
 except Exception:
@@ -821,35 +831,8 @@ def gercekci_maliyet_hesapla(travel_data: dict, duration_days: int) -> dict:
 # ---------------------------------------------------------------------------
 # MALİYET AJAN
 # ---------------------------------------------------------------------------
-
-VERI_KLASORU = "data"
-MALIYET_DOSYASI = os.path.join(VERI_KLASORU, "maliyet_gecmisi.json")
-
-
-def maliyet_kaydet(kullanici, sehir, gun, kat, standart, ozel, tasarruf):
-    os.makedirs(VERI_KLASORU, exist_ok=True)
-    try:
-        with open(MALIYET_DOSYASI, "r", encoding="utf-8") as f:
-            mal = json.load(f)
-    except Exception:
-        mal = {"kayitlar": []}
-    mal.setdefault("kayitlar", []).append({
-        "tarih": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "kullanici": kullanici, "sehir": sehir,
-        "gun_sayisi": gun, "butce_kategorisi": kat,
-        "standart_plan_tl": standart, "ozellestirilmis_plan_tl": ozel,
-        "tasarruf_yuzdesi": round(tasarruf, 2),
-    })
-    with open(MALIYET_DOSYASI, "w", encoding="utf-8") as f:
-        json.dump(mal, f, ensure_ascii=False, indent=2)
-
-
-def maliyet_gecmisi_oku() -> list:
-    try:
-        with open(MALIYET_DOSYASI, "r", encoding="utf-8") as f:
-            return json.load(f).get("kayitlar", [])
-    except Exception:
-        return []
+# maliyet_kaydet / maliyet_gecmisi_oku artık db.py'den geliyor (SQLite) — bkz.
+# dosyanın üstündeki "from db import (...)" bloğu.
 
 
 class MaliyetAgent:
@@ -1934,74 +1917,6 @@ class MapAgent:
 # ---------------------------------------------------------------------------
 # KULLANICI YÖNETİMİ
 # ---------------------------------------------------------------------------
-
-USERS_FILE = os.path.join("data", "users.json")
-
-
-def _load_users() -> dict:
-    os.makedirs("data", exist_ok=True)
-    try:
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _save_users(users: dict):
-    os.makedirs("data", exist_ok=True)
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, ensure_ascii=False, indent=2)
-
-
-def _hash_password(pw: str) -> str:
-    return hashlib.sha256(pw.encode()).hexdigest()
-
-
-def register_user(username: str, password: str, email: str = "") -> tuple[bool, str]:
-    if len(username) < 3:
-        return False, "Kullanıcı adı en az 3 karakter olmalıdır."
-    if len(password) < 6:
-        return False, "Şifre en az 6 karakter olmalıdır."
-    users = _load_users()
-    if username in users:
-        return False, "Bu kullanıcı adı zaten alınmış."
-    users[username] = {
-        "password_hash": _hash_password(password),
-        "email": email,
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "mbti_type": None,
-        "travel_history": [],
-    }
-    _save_users(users)
-    return True, "Kayıt başarılı!"
-
-
-def login_user(username: str, password: str) -> tuple[bool, str]:
-    users = _load_users()
-    if username not in users:
-        return False, "Kullanıcı adı bulunamadı."
-    if users[username]["password_hash"] != _hash_password(password):
-        return False, "Şifre hatalı."
-    return True, "Giriş başarılı!"
-
-
-def get_user_profile(username: str) -> dict:
-    users = _load_users()
-    return users.get(username, {})
-
-
-def update_user_mbti(username: str, mbti_type: str):
-    users = _load_users()
-    if username in users:
-        users[username]["mbti_type"] = mbti_type
-        _save_users(users)
-
-
-def save_travel_history(username: str, travel_record: dict):
-    users = _load_users()
-    if username in users:
-        users[username].setdefault("travel_history", []).append({
-            **travel_record,
-            "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        })
-        _save_users(users)
+# register_user / login_user / get_user_profile / update_user_mbti /
+# save_travel_history artık db.py'den geliyor (SQLite + PBKDF2-SHA256 +
+# oturum belirteçleri) — bkz. dosyanın üstündeki "from db import (...)" bloğu.
