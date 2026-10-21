@@ -1,23 +1,27 @@
 # app.py — SmartTravel AI
 
 import os
-import time
-import math
+import html as _html
 import streamlit as st
-from datetime import date, datetime
+from datetime import date
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from agents import (
-    MBTIAgent, ACOAgent, UlasimAgent, RestaurantAgent,
-    MaliyetAgent, PlanAgent, AgentBus,
+from agents import MBTIAgent
+from db import (
     register_user, login_user, get_user_profile,
     update_user_mbti, save_travel_history, delete_travel_plan,
     invalidate_session,
-    maliyet_gecmisi_oku,
-    _gemini_generate,
 )
+import memory
+from multiagent import Orkestrator, hafizaya_kaydet
+from plan_render import (
+    gunluk_html, seyahat_notu_karti, KATEGORI_ETIKET,
+    plan_ozet_html, butce_dokum_html, restoran_listesi_html, yedek_yerler_html, ipuclari_html,
+)
+import hazirlik
+from poi_data import PILOT_DESTINASYONLAR
 
 st.set_page_config(
     page_title="SmartTravel AI",
@@ -35,7 +39,39 @@ st.markdown("""
 *, *::before, *::after {
     font-family: 'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif !important;
 }
+/* Streamlit simgeleri (expander oku vb.) kendi simge fontunu kullanmalı; yoksa "arrow_down" yazısı görünür */
+[data-testid="stIconMaterial"], span[class*="material-symbols"], .material-symbols-rounded {
+    font-family: 'Material Symbols Rounded' !important;
+}
 [data-testid="stAppViewContainer"] { background: #dce9f4; }
+/* ── Tatil Listesi (uygulama paletinde) ── */
+.st-key-tatil_listesi { background:#fffefb; border:1px solid #e8dfd4; border-radius:16px; padding:22px 22px 14px; }
+.st-key-tatil_listesi .tl-ust { display:flex; justify-content:space-between; align-items:flex-end; gap:12px;
+    border-bottom:1px solid #efe8de; padding-bottom:14px; margin-bottom:16px; }
+.st-key-tatil_listesi .tl-ust-etiket { font-size:10px; font-weight:800; color:#8b7355; text-transform:uppercase; letter-spacing:.7px; }
+.st-key-tatil_listesi .tl-baslik { font-size:22px; font-weight:800; color:#2c2416; letter-spacing:-.3px; margin-top:3px; }
+.st-key-tatil_listesi .tl-alt { font-size:12px; color:#7a6a5a; margin-top:2px; }
+.st-key-tatil_listesi .tl-yuzde { text-align:right; min-width:120px; }
+.st-key-tatil_listesi .tl-yuzde b { font-size:20px; color:#2c2416; }
+.st-key-tatil_listesi .tl-cubuk { background:#efe8de; border-radius:4px; height:5px; margin-top:6px; }
+.st-key-tatil_listesi .tl-cubuk div { background:#8b7355; height:5px; border-radius:4px; }
+.st-key-tatil_listesi .tl-kart-baslik { display:flex; align-items:center; gap:9px; margin-bottom:8px; }
+.st-key-tatil_listesi .tl-ikon { width:28px; height:28px; border-radius:8px; display:flex; align-items:center;
+    justify-content:center; font-size:14px; flex-shrink:0; }
+.st-key-tatil_listesi .tl-etiket { font-size:10.5px; font-weight:800; color:#2c2416; text-transform:uppercase; letter-spacing:.6px; }
+.st-key-tatil_listesi .tl-sayac { margin-left:auto; font-size:11px; font-weight:700; color:#8b7355;
+    background:#f2ede6; border-radius:20px; padding:2px 9px; }
+.st-key-tatil_listesi .tl-alt-yazi { text-align:center; color:#b5a99a; font-size:11px; font-weight:700;
+    text-transform:uppercase; letter-spacing:1px; margin-top:10px; }
+.st-key-tatil_listesi [class*="st-key-tlkart_"] { background:#faf8f5; border:1px solid #e8dfd4; border-radius:12px;
+    padding:14px 16px 8px; }
+.st-key-tatil_listesi [data-testid="stCheckbox"] p { font-size:13px !important; color:#3a2f24 !important; }
+.st-key-tatil_listesi [data-testid="stCheckbox"] { margin-bottom:-8px; }
+.st-key-tatil_listesi textarea { font-size:13px !important; background:#fffefb !important;
+    border:1px solid #e8dfd4 !important; border-radius:8px !important; }
+/* Gezi sonrası yorum kartı */
+.yorum-notu { font-size: 12.5px; color: #6b5a48; line-height: 1.7; background: #f8f4ee;
+              border: 1px solid #ece3d7; border-radius: 10px; padding: 10px 14px; margin-bottom: 10px; }
 [data-testid="stMain"] > div { background: transparent !important; }
 [data-testid="stHeader"] { display: none !important; }
 .block-container { padding: 28px 32px 32px !important; max-width: 100% !important; }
@@ -191,17 +227,13 @@ _defaults = {
     "user_data": {}, "mbti_completed": False,
     "mbti_report": "", "mbti_archetype": "",
     "travel_history": [], "last_plan": None,
-    "last_aco": None, "last_t_data": None,
-    "maliyet_result": None, "current_tab": 0,
+    "last_t_data": None, "current_tab": 0,
     "_profil_yuklendi": False,
-    "_agent_bus": None,
     "_session_token": None,
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
-if st.session_state["_agent_bus"] is None:
-    st.session_state["_agent_bus"] = AgentBus()
 
 # ── MBTI veri tabloları ────────────────────────────────────────────────────────
 MBTI_SEYAHAT = {
@@ -480,98 +512,6 @@ def _plan_pdf_bytes(baslik: str, alt_baslik: str, gun_metinleri: list) -> bytes:
     return bytes(pdf.output())
 
 
-def aco_optimized_route(aco_res: dict) -> list:
-    if not aco_res:
-        return []
-    for key in ("optimized_route", "locations"):
-        v = aco_res.get(key)
-        if v and isinstance(v, list):
-            return v
-    for v in aco_res.values():
-        if isinstance(v, list) and v:
-            return v
-    return []
-
-
-def _draw_route_svg(locations: list, path: list, dest: str = "") -> str:
-    """Koordinatsız deterministik dairesel ACO haritası."""
-    import math, random as _rand
-    n = len(locations)
-    if n < 2:
-        return ""
-
-    names = [
-        (lo["name"] if isinstance(lo, dict) and "name" in lo else str(lo))[:18]
-        for lo in locations
-    ]
-    ordered_names = [names[i] for i in path if i < n]
-
-    seed_str = dest + "".join(names)
-    rng = _rand.Random(sum(ord(c) for c in seed_str))
-
-    svgW, svgH, pad = 540, 320, 54
-    cx_center = svgW / 2
-    cy_center = svgH / 2
-
-    coords = []
-    for i in range(n):
-        angle = (2 * math.pi * i / n) + rng.uniform(-0.25, 0.25)
-        r     = rng.uniform(0.52, 0.82)
-        x = pad + (svgW - 2*pad) * (0.5 + r * math.cos(angle) * 0.44)
-        y = pad + (svgH - 2*pad) * (0.5 + r * math.sin(angle) * 0.40)
-        coords.append((round(x, 1), round(y, 1)))
-
-    ordered_coords = [coords[i] for i in path if i < n]
-
-    # Animasyonlu kesik ok çizgileri
-    lines = ""
-    for i in range(len(ordered_coords) - 1):
-        x1, y1 = ordered_coords[i]
-        x2, y2 = ordered_coords[i + 1]
-        delay = i * 0.18
-        lines += (
-            f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
-            f'stroke="#8b7355" stroke-width="2" stroke-dasharray="7 4" '
-            f'stroke-linecap="round" opacity=".75">'
-            f'<animate attributeName="stroke-dashoffset" from="0" to="-22" '
-            f'dur="1.6s" begin="{delay:.2f}s" repeatCount="indefinite"/>'
-            f'</line>'
-        )
-
-    # Düğümler
-    dots = ""
-    for i, (x, y) in enumerate(coords):
-        is_first = (path[0] == i) if path else (i == 0)
-        is_last  = (path[-1] == i) if path else (i == n - 1)
-        fill = "#8b7355" if is_first else ("#d4976a" if is_last else "#b5a99a")
-        r_dot = 10 if (is_first or is_last) else 8
-        anchor = "start" if x < svgW / 2 else "end"
-        lbl_x  = x + (13 if x < svgW / 2 else -13)
-        lbl_y  = y - 12 if y < svgH / 2 else y + 20
-        dots += (
-            f'<circle cx="{x}" cy="{y}" r="{r_dot}" fill="{fill}" '
-            f'stroke="white" stroke-width="2.5" opacity=".92"/>'
-            f'<text x="{lbl_x}" y="{lbl_y}" text-anchor="{anchor}" '
-            f'font-size="10.5" font-family="system-ui,sans-serif" '
-            f'fill="#2c2416" font-weight="600">{names[i]}</text>'
-        )
-
-    # Merkez başlık
-    center_lbl = (
-        f'<text x="{cx_center}" y="{cy_center}" text-anchor="middle" '
-        f'dominant-baseline="middle" font-size="13" fill="#8b7355" '
-        f'font-family="system-ui,sans-serif" font-weight="700" opacity=".55">'
-        f'{dest}</text>'
-    ) if dest else ""
-
-    return (
-        f'<svg width="{svgW}" height="{svgH}" xmlns="http://www.w3.org/2000/svg" '
-        f'style="background:#faf8f5;border-radius:14px;border:1px solid #e8dfd4;display:block">'
-        f'{center_lbl}{lines}{dots}'
-        f'</svg>'
-    )
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # AUTH
 # ════════════════════════════════════════════════════════════════════════════
@@ -638,6 +578,8 @@ if not st.session_state.logged_in:
 # SOL SİDEBAR
 # ════════════════════════════════════════════════════════════════════════════
 
+if st.session_state.current_tab not in range(5):     # eski 6 sekmeli sürümden kalan oturum
+    st.session_state.current_tab = 4
 cur          = st.session_state.current_tab
 mbti_type    = st.session_state.user_data.get("mbti_type", "")
 mbti_arch    = st.session_state.mbti_archetype
@@ -653,8 +595,8 @@ NAV_ITEMS = [
     (0, "🧬", "Kimlik Testi",   st.session_state.mbti_completed),
     (1, "🗺️", "Rota Formu",     True),
     (2, "📋", "Plan Sonucu",    st.session_state.last_plan is not None),
-    (3, "🐜", "ACO & Maliyet",  st.session_state.last_aco is not None),
-    (4, "📖", "Geçmişim",       True),
+    (3, "🧳", "Gezi Hazırlığı", st.session_state.last_plan is not None),
+    (4, "📖", "Seyahatlerim",   True),
 ]
 
 with st.sidebar:
@@ -765,8 +707,8 @@ with st.sidebar:
         0: ("🧬", "Kimlik Testi", "20 soruyla gezgin tipinizi belirleyin. Sonuç tüm analizleri etkiler."),
         1: ("🗺️", "Rota Formu", "Destinasyon, tarih ve bütçe bilgilerinizi girerek plan oluşturun."),
         2: ("📋", "Plan Sonucu", "Gün gün detaylı program, galeri ve bütçe özetini buradan görün."),
-        3: ("🐜", "ACO Analizi", "Karınca kolonisi algoritması en verimli rotayı optimize eder."),
-        4: ("📖", "Geçmişim", "Kayıtlı seyahat planlarınızı ve harcama istatistiklerinizi görün."),
+        3: ("🧳", "Gezi Hazırlığı", "Sana özel tatil listesi ve günlük harcama planı."),
+        4: ("📖", "Seyahatlerim", "Gezilerin, gittiğin yerler ve yorumların — sonraki planın bunları hatırlar."),
     }
     if cur in _tab_hints:
         _h_icon, _h_title, _h_desc = _tab_hints[cur]
@@ -843,7 +785,6 @@ if cur == 0:
         # ── Kişilik boyut çubukları HTML ──────────────────────────────────
         def _dim_bar(letter_a, letter_b, label_a, label_b, is_a):
             _fill = 72 if is_a else 28
-            _active_side = "left" if is_a else "right"
             return f"""
 <div style="margin-bottom:10px">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
@@ -1061,22 +1002,8 @@ if cur == 0:
                 st.session_state.mbti_completed = False; st.rerun()
 
     else:
-        page_header("Gezgin Kimlik Testi", "Turizm kimliğinize yönelik 20 soruyla seyahat profilinizi belirliyoruz")
-
-        # ── Test modu seçimi: hızlı (20 soru) / genişletilmiş (70 madde) ──
-        test_modu = st.radio(
-            "Test Modu",
-            ["⚡ Hızlı Test (20 soru )", "🔬 Genişletilmiş Form (70 madde )"],
-            horizontal=True,
-            label_visibility="collapsed",
-            key="mbti_test_modu",
-        )
-        genisletilmis = test_modu.startswith("🔬")
-
-        _soru_sayisi = 70 if genisletilmis else 20
-        _sure = "12 dk" if genisletilmis else "4 dk"
-        _mod_baslik = "Genişletilmiş Değerlendirme" if genisletilmis else "Hızlı Kimlik Testi"
-        st.markdown(f"""
+        page_header("Gezgin Kimlik Testi", "20 soruyla seyahat kişiliğini belirliyoruz — her soruda iki seçenek var")
+        st.markdown("""
 <div style="background:linear-gradient(135deg,#ffffff,#f8f7f4);border:1px solid #e5e7eb;border-radius:14px;
             padding:16px 22px;margin-bottom:20px;display:flex;align-items:center;gap:16px;
             box-shadow:0 1px 3px rgba(30,20,10,0.04)">
@@ -1084,18 +1011,18 @@ if cur == 0:
               background:linear-gradient(135deg,#4f46e5,#818cf8);
               display:flex;align-items:center;justify-content:center;font-size:19px">🧬</div>
   <div style="flex:1;min-width:160px">
-    <div style="font-size:13px;font-weight:700;color:#1f2937">{_mod_baslik}</div>
+    <div style="font-size:13px;font-weight:700;color:#1f2937">Kimlik Testi</div>
     <div style="font-size:11.5px;color:#6b7280;margin-top:2px">
-      Doğru ya da yanlış cevap yok — size en uygun gelen seçeneği işaretleyin.
+      Doğru ya da yanlış cevap yok — sana daha yakın gelen seçeneği (A ya da B) işaretle.
     </div>
   </div>
   <div style="display:flex;gap:8px">
     <div style="background:#eef2ff;border-radius:10px;padding:8px 14px;text-align:center;min-width:54px">
-      <div style="font-size:17px;font-weight:800;color:#4f46e5">{_soru_sayisi}</div>
+      <div style="font-size:17px;font-weight:800;color:#4f46e5">20</div>
       <div style="font-size:10px;color:#6b7280">Soru</div>
     </div>
     <div style="background:#f0fdf4;border-radius:10px;padding:8px 14px;text-align:center;min-width:54px">
-      <div style="font-size:17px;font-weight:800;color:#059669">{_sure}</div>
+      <div style="font-size:17px;font-weight:800;color:#059669">3 dk</div>
       <div style="font-size:10px;color:#6b7280">Süre</div>
     </div>
     <div style="background:#fdf4ff;border-radius:10px;padding:8px 14px;text-align:center;min-width:54px">
@@ -1105,155 +1032,46 @@ if cur == 0:
   </div>
 </div>""", unsafe_allow_html=True)
 
-        if genisletilmis:
-            # ══ 70 MADDELİK GENİŞLETİLMİŞ FORM ══════════════════════════════
-            st.markdown("""<div style="background:linear-gradient(135deg,#fdf4ff,#fae8ff);border-radius:12px;
-                padding:12px 16px;margin-bottom:14px;border:1px solid #e9d5ff">
-  <div style="font-size:9px;font-weight:700;color:#9333ea;text-transform:uppercase;letter-spacing:0.6px">Genişletilmiş Değerlendirme</div>
-  <div style="font-size:13px;font-weight:700;color:#3b0764;margin-top:2px">Her ifadeye ne ölçüde katıldığınızı işaretleyin</div>
-  <div style="font-size:11px;color:#6b7280">1 = Kesinlikle Katılmıyorum · 3 = Kararsızım · 5 = Kesinlikle Katılıyorum</div>
-</div>""", unsafe_allow_html=True)
-
-            LIKERT = ["1", "2", "3", "4", "5"]
-            items = MBTIAgent.EXTENDED_ITEMS
+        _sorular = MBTIAgent.SORULAR
+        _bolumler = [
+            ("Bölüm 1 / 2", "Kişilik &amp; Motivasyon", "Sorular 1 – 10", "#4f46e5", "#eef2ff", "#c7d2fe", "#1e1b4b", 0),
+            ("Bölüm 2 / 2", "Turizm Kimliği &amp; Keşif Tarzı", "Sorular 11 – 20", "#059669", "#f0fdf4", "#a7f3d0", "#064e3b", 10),
+        ]
+        with st.form("mbti_form"):
             st.markdown('<div class="mbti-q-card">', unsafe_allow_html=True)
-            with st.form("mbti_ext_form"):
-                ext_answers = []
-                ec1, ec2 = st.columns(2, gap="large")
-                yari = (len(items) + 1) // 2
-                with ec1:
-                    for i, item in enumerate(items[:yari]):
+            cevaplar = [None] * len(_sorular)
+            for kol, (etk, baslik, alt, renk, zemin, kenar, koyu, bas) in zip(st.columns(2, gap="large"), _bolumler):
+                with kol:
+                    st.markdown(f"""<div style="background:{zemin};border-radius:12px;padding:12px 16px;
+                        margin-bottom:14px;border:1px solid {kenar}">
+  <div style="font-size:9px;font-weight:700;color:{renk};text-transform:uppercase;letter-spacing:0.6px">{etk}</div>
+  <div style="font-size:13px;font-weight:700;color:{koyu};margin-top:2px">{baslik}</div>
+  <div style="font-size:11px;color:#6b7280">{alt}</div>
+</div>""", unsafe_allow_html=True)
+                    for i in range(bas, bas + 10):
+                        soru, a_metni, b_metni, _, _ = _sorular[i]
                         with st.container(border=True):
-                            ext_answers.append(st.radio(
-                                f"{i+1}. {item['text']}", LIKERT, index=2,
-                                horizontal=True, key=f"ext_{i}"))
-                with ec2:
-                    for i, item in enumerate(items[yari:], start=yari):
-                        with st.container(border=True):
-                            ext_answers.append(st.radio(
-                                f"{i+1}. {item['text']}", LIKERT, index=2,
-                                horizontal=True, key=f"ext_{i}"))
-
-                if st.form_submit_button("Profil Oluştur (Genişletilmiş)", type="primary"):
-                    with st.spinner("Profiliniz oluşturuluyor..."):
-                        try:
-                            res = MBTIAgent().analyze_extended([int(a) for a in ext_answers])
-                            st.session_state.mbti_report    = res.get("description", "")
-                            st.session_state.user_data["mbti_type"] = res.get("mbti_type", "ENFP")
-                            st.session_state.mbti_archetype = res.get("archetype", "Gezgin")
-                            st.session_state.mbti_completed = True
-                            update_user_mbti(st.session_state.username, res.get("mbti_type", ""))
-                            go_tab(0); st.rerun()
-                        except Exception as e:
-                            st.error(f"Hata: {e}")
+                            cevaplar[i] = st.radio(f"{i + 1}. {soru}", [f"A) {a_metni}", f"B) {b_metni}"],
+                                                   index=None, key=f"mbti_ab_q{i + 1}")
             st.markdown('</div>', unsafe_allow_html=True)
 
-        else:
-            # ══ HIZLI TEST — 20 SORU ════════════════════════════════════════
-            QUICK_P1 = [
-                ("1. Hafta sonu ideal planınız nedir?",
-                 ["A) Kalabalık arkadaş grubuyla eğlence", "B) Yeni yerler keşfetmek",
-                  "C) Sakin bir kafede derin sohbet", "D) Evde tek başıma dinlenmek"]),
-                ("2. Bir şehri gezerken odağınız nereye gider?",
-                 ["A) Somut tarihi anıtlar ve müzeler", "B) Şehrin mimari dokusu",
-                  "C) Yerel halkın yaşam tarzı", "D) Şehrin bana hissettirdiği ruh"]),
-                ("3. Beklenmedik bir sorunla karşılaşırsanız tavrınız nedir?",
-                 ["A) Hemen mantıklı bir plan yaparım", "B) Teknik çözümleri araştırırım",
-                  "C) Moralimi bozmam, macera derim", "D) Çevremden duygusal destek alırım"]),
-                ("4. Bavulunuzu nasıl hazırlarsınız?",
-                 ["A) Günler öncesinden listeli", "B) Kategorize ederek düzenli",
-                  "C) Son dakika ne bulursam", "D) Sadece en temel eşyalarla"]),
-                ("5. Seyahatte sizi en çok ne canlandırır?",
-                 ["A) Sürekli yeni insanlarla tanışmak", "B) Gece hayatı ve aksiyon",
-                  "C) Tarihi derinlemesine öğrenmek", "D) Sessiz doğa yürüyüşleri"]),
-                ("6. Hangi kültürel aktivite size en uygun?",
-                 ["A) Büyük festival ve konserler", "B) Popüler turistik turlar",
-                  "C) Modern sanat ve tasarım", "D) Yerel efsaneler ve gizemler"]),
-                ("7. Bir restorana nasıl karar verirsiniz?",
-                 ["A) Sosyal medya puan ve yorumlarını analiz ederek", "B) Menüyü inceleyip mantıkla",
-                  "C) Vitrinine bakıp içgüdüyle", "D) Arkadaş tavsiyesi ve hisle"]),
-                ("8. Zamanı nasıl yönetirsiniz?",
-                 ["A) Dakik ve her saati planlı", "B) Verimlilik odaklı",
-                  "C) Esnek ve rahat", "D) Tamamen akışına bırakarak"]),
-                ("9. Konaklama tercihiniz hangisi?",
-                 ["A) Şehrin kalbi, en canlı merkez", "B) Modern ve teknolojik oteller",
-                  "C) Butik ve karakteristik pansiyonlar", "D) Doğa içinde izole kamp veya dağ evi"]),
-                ("10. Keşif stiliniz nedir?",
-                 ["A) Profesyonel rehber eşliğinde", "B) Elinde harita ve planla",
-                  "C) Ara sokaklarda spontane", "D) Tamamen kaybolup ruhu hissederek"]),
-            ]
-            QUICK_P2 = [
-                ("11. Seyahatte akşamlarınızı nasıl geçirirsiniz?",
-                 ["A) Canlı meydanlar ve barlarda", "B) Grup yemeği ve tur etkinliklerinde",
-                  "C) Sakin bir kafede kitap veya günlükle", "D) Otelde dinlenip ertesi güne hazırlanarak"]),
-                ("12. Bir destinasyon seçerken sizi en çok ne çeker?",
-                 ["A) Görülecek yerlerin somut listesi", "B) Yerel mutfağı ve lezzetleri",
-                  "C) Şehrin atmosferi ve hikâyesi", "D) Kimsenin bilmediği keşfedilmemiş yerler"]),
-                ("13. Seyahat arkadaşınızla rota konusunda anlaşamazsanız?",
-                 ["A) Mantıklı gerekçelerle ikna ederim", "B) Maliyet ve süre verileriyle karşılaştırırım",
-                  "C) Orta yolu bulmaya çalışırım", "D) Onun mutlu olacağı seçeneği tercih ederim"]),
-                ("14. Dönüş gününüz yaklaşırken durumunuz nasıldır?",
-                 ["A) Her şey planlandığı gibi tamamlanmıştır", "B) Son gün kontrol listemi gözden geçiririm",
-                  "C) Son dakika alışverişine çıkarım", "D) Uçağa son anda yetişirim, dert etmem"]),
-                ("15. Gittiğiniz yerde yerel halkla ilişkiniz nasıldır?",
-                 ["A) Hemen sohbet başlatırım", "B) Grup aktivitelerinde doğal olarak kaynaşırım",
-                  "C) Gerektiğinde kibarca iletişim kurarım", "D) Gözlemlemeyi konuşmaya tercih ederim"]),
-                ("16. Müze veya ören yeri gezerken tarzınız nedir?",
-                 ["A) Her eseri sırasıyla incelerim", "B) Sesli rehberle teknik detayları öğrenirim",
-                  "C) Yalnızca ilgimi çekenlere odaklanırım", "D) Eserlerin hikâyelerini hayal ederim"]),
-                ("17. Seyahat bütçeniz aşılırsa ne yaparsınız?",
-                 ["A) Harcama kalemlerini analiz edip keserim", "B) Öncelik tablosu yapıp plana bağlarım",
-                  "C) Deneyimden kısmam, bir şekilde idare ederim", "D) Anıların değeri paradan büyüktür, takmam"]),
-                ("18. Gezi programınız nasıl görünür?",
-                 ["A) Saat saat planlı", "B) Günlük ana başlıklar halinde",
-                  "C) Sadece ilk gün planlı, gerisi akışta", "D) Plansızlık en iyi plandır"]),
-                ("19. Seyahat anılarınızı nasıl paylaşırsınız?",
-                 ["A) Anında sosyal medyada paylaşırım", "B) Dönünce arkadaş ortamında anlatırım",
-                  "C) Yalnızca yakınlarımla özel paylaşırım", "D) Kendime saklar, günlüğüme yazarım"]),
-                ("20. Sizin için seyahatin asıl anlamı nedir?",
-                 ["A) Görülmesi gerekenleri görmek", "B) Yeni tatlar ve canlı deneyimler",
-                  "C) Kendimi keşfetmek ve dinlenmek", "D) Dünyaya bakışımı dönüştürmek"]),
-            ]
-            with st.form("mbti_form"):
-                st.markdown('<div class="mbti-q-card">', unsafe_allow_html=True)
-                c1, c2 = st.columns(2, gap="large")
-                with c1:
-                    st.markdown("""<div style="background:linear-gradient(135deg,#eef2ff,#e0e7ff);border-radius:12px;
-                        padding:12px 16px;margin-bottom:14px;border:1px solid #c7d2fe">
-  <div style="font-size:9px;font-weight:700;color:#4f46e5;text-transform:uppercase;letter-spacing:0.6px">Bölüm 1 / 2</div>
-  <div style="font-size:13px;font-weight:700;color:#1e1b4b;margin-top:2px">Kişilik &amp; Motivasyon</div>
-  <div style="font-size:11px;color:#6b7280">Sorular 1 – 10</div>
-</div>""", unsafe_allow_html=True)
-                    p1_answers = []
-                    for i, (q_text, opts) in enumerate(QUICK_P1, start=1):
-                        with st.container(border=True):
-                            p1_answers.append(st.radio(q_text, opts, key=f"mbti_q{i}"))
-                with c2:
-                    st.markdown("""<div style="background:linear-gradient(135deg,#f0fdf4,#dcfce7);border-radius:12px;
-                        padding:12px 16px;margin-bottom:14px;border:1px solid #a7f3d0">
-  <div style="font-size:9px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:0.6px">Bölüm 2 / 2</div>
-  <div style="font-size:13px;font-weight:700;color:#064e3b;margin-top:2px">Turizm Kimliği &amp; Keşif Tarzı</div>
-  <div style="font-size:11px;color:#6b7280">Sorular 11 – 20</div>
-</div>""", unsafe_allow_html=True)
-                    p2_answers = []
-                    for i, (q_text, opts) in enumerate(QUICK_P2, start=11):
-                        with st.container(border=True):
-                            p2_answers.append(st.radio(q_text, opts, key=f"mbti_q{i}"))
-                st.markdown('</div>', unsafe_allow_html=True)
+            extra = st.text_area("Opsiyonel Not", placeholder="Örnek: Vejetaryenim, fotoğraf çekmekten hoşlanıyorum...")
 
-                extra = st.text_area("Opsiyonel Not", placeholder="Örnek: Vejetaryenim, fotoğraf çekmekten hoşlanıyorum...")
-
-                if st.form_submit_button("Profil Oluştur", type="primary"):
-                    ans = {f"q{i+1}": a for i, a in enumerate(p1_answers + p2_answers)}
-                    ans["extra"] = extra
+            if st.form_submit_button("Profil Oluştur", type="primary"):
+                eksik = [str(i + 1) for i, c in enumerate(cevaplar) if c is None]
+                if eksik:
+                    st.warning(f"Lütfen tüm soruları yanıtla — boş kalanlar: {', '.join(eksik)}")
+                else:
                     with st.spinner("Profiliniz oluşturuluyor..."):
                         try:
-                            res = MBTIAgent().analyze(ans)
+                            res = MBTIAgent().analyze(cevaplar)
                             st.session_state.mbti_report    = res.get("description", "")
                             st.session_state.user_data["mbti_type"] = res.get("mbti_type", "ENFP")
                             st.session_state.mbti_archetype = res.get("archetype", "Gezgin")
                             st.session_state.mbti_completed = True
                             update_user_mbti(st.session_state.username, res.get("mbti_type", ""))
+                            if extra and extra.strip():
+                                memory.not_ekle(st.session_state.username, extra, "serbest_not")
                             go_tab(0); st.rerun()
                         except Exception as e:
                             st.error(f"Hata: {e}")
@@ -1304,7 +1122,13 @@ elif cur == 1:
 
         with st.form("travel_form"):
             st.markdown('<div style="font-size:10px;font-weight:700;color:#4f46e5;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:5px">Destinasyon</div>', unsafe_allow_html=True)
-            hedef = st.text_input("Destinasyon", placeholder="Şehir — Örnek: Roma, Tiflis, Marakeş", label_visibility="collapsed")
+            hedef = st.text_input("Destinasyon", value="İstanbul", label_visibility="collapsed",
+                                  placeholder="Şehir ya da ülke — Örnek: İstanbul, Roma, İspanya")
+            st.markdown(
+                '<div style="font-size:11.5px;color:#7a6a5a;margin-top:-6px;line-height:1.7">'
+                '<b>Pilot destinasyonlar:</b> ⭐ İstanbul · ' + " · ".join(_d for _d in PILOT_DESTINASYONLAR[1:])
+                + '<br>Ülke yazarsan (ör. İspanya, Hollanda) plan o ülkenin pilot şehrinde kurulur; '
+                  'listede olmayan şehirler için de plan yapılır.</div>', unsafe_allow_html=True)
 
             st.markdown('<div style="font-size:10px;font-weight:700;color:#059669;text-transform:uppercase;letter-spacing:0.6px;margin:14px 0 5px">Tarihler</div>', unsafe_allow_html=True)
             d1, d2 = st.columns(2)
@@ -1318,12 +1142,22 @@ elif cur == 1:
             butce_kat  = r3.selectbox("Bütçe", ["ekonomik", "orta", "luks"],
                             format_func=lambda x: {"ekonomik": "Ekonomik", "orta": "Orta", "luks": "Lüks"}[x])
 
-            st.markdown('<div style="font-size:10px;font-weight:700;color:#db2777;text-transform:uppercase;letter-spacing:0.6px;margin:14px 0 5px">Profil</div>', unsafe_allow_html=True)
-            b1, b2 = st.columns(2)
-            butce         = b1.number_input("Toplam Bütçe (TL)", min_value=500, value=10_000, step=500)
-            kullanici_adi = b2.text_input("Adınız", placeholder="Örnek: Ayşe")
+            st.markdown('<div style="font-size:10px;font-weight:700;color:#db2777;text-transform:uppercase;letter-spacing:0.6px;margin:14px 0 5px">Bütçe Kısıtı</div>', unsafe_allow_html=True)
+            b1, b2 = st.columns([1.2, 1])
+            butce        = b1.number_input("Toplam Bütçe Üst Sınırı (TL)", min_value=500, value=25_000, step=500,
+                                           help="Tüm grup için; konaklama, yemek, ulaşım ve girişler dahil.")
+            b2.markdown("<div style='height:30px'></div>", unsafe_allow_html=True)
+            butce_uygula = b2.checkbox("Maliyet tasarrufu", value=True,
+                                         help="Açıksa plan bu bütçeyi aşmayacak şekilde ayarlanır.")
 
-            submitted = st.form_submit_button("Plan Oluştur", type="primary")
+            st.markdown('<div style="font-size:10px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:0.6px;margin:14px 0 5px">Serbest Not — Bu geziden ne bekliyorsun?</div>', unsafe_allow_html=True)
+            serbest_not = st.text_area(
+                "Serbest not", label_visibility="collapsed", height=110, max_chars=1500,
+                placeholder="Kendi cümlelerinle yaz — testten önceliklidir. Örn: Kalabalık yerleri sevmem, "
+                            "müze ve sanat galerilerine bayılırım. Vejetaryenim, akşamları sakin bir yer isterim.")
+            kullanici_adi = st.session_state.username
+
+            submitted = st.form_submit_button("✈️ Planımı Oluştur", type="primary")
 
         if submitted:
             errors = []
@@ -1331,6 +1165,10 @@ elif cur == 1:
             if bit < bas:         errors.append("Çıkış tarihi başlangıçtan önce olamaz.")
             for err in errors:
                 st.error(err)
+
+            if not errors and (bit - bas).days + 1 > 14:
+                errors.append("En fazla 14 günlük plan oluşturulabilir.")
+                st.error(errors[-1])
 
             if not errors:
                 gun_farki = (bit - bas).days + 1
@@ -1344,93 +1182,91 @@ elif cur == 1:
                     "end_date":             str(bit),
                     "duration_days":        gun_farki,
                     "butce_kategorisi":     butce_kat,
-                    "kullanici_adi":        kullanici_adi.strip() or st.session_state.username,
+                    "kullanici_adi":        kullanici_adi,
                     "mbti_type":            st.session_state.user_data.get("mbti_type", "ENFP"),
-                    "user_profile":         st.session_state.user_data,
-                    "travel_history":       st.session_state.travel_history,
+                    "serbest_not":          serbest_not.strip(),
+                }
+                istek = {
+                    "sehir": hedef.strip(), "gun": gun_farki, "kisi": int(kisi),
+                    "butce_kategorisi": butce_kat, "butce_limiti": float(butce) if butce_uygula else None,
+                    "mbti": t_data["mbti_type"], "serbest_not": serbest_not.strip(),
+                    "ulasim": ulasim_sec, "baslangic": str(bas),
                 }
 
-                progress = st.progress(0)
-                status   = st.empty()
-                try:
-                    # Ajanlar artık app.py'nin elle sıraya koyduğu parametreler yerine
-                    # ortak bus üzerinden birbirlerinin çıktısını okuyor (act()).
-                    bus = st.session_state["_agent_bus"]
-
-                    progress.progress(10); status.caption("🐜 Rota optimize ediliyor...")
-                    aco_res = ACOAgent().act(bus, t_data)
-                    if "optimized_route" not in aco_res:
-                        aco_res["optimized_route"] = aco_optimized_route(aco_res)
-
-                    progress.progress(30); status.caption("✈️ Ulaşım hesaplanıyor...")
-                    ulas_res = UlasimAgent().act(bus, t_data)
-
-                    progress.progress(50); status.caption("🍽️ Restoran önerileri...")
-                    RestaurantAgent().act(bus, t_data)
-                    rest_schedule = bus.latest("restoran.schedule")
-
-                    progress.progress(65); status.caption("💰 Maliyet analizi...")
-                    mal_res = MaliyetAgent().act(bus, t_data)
-
-                    progress.progress(80); status.caption("📝 Plan yazılıyor...")
-                    plan = PlanAgent().create_plan(t_data, aco_res, ulas_res, rest_schedule, mal_res)
-
-                    progress.progress(100); status.caption("✅ Hazır!")
-                    plan.update({
-                        "start_date": t_data["start_date"], "end_date": t_data["end_date"],
-                        "group_size": t_data["group_size"], "transport": t_data["transport"],
-                        "butce_kategorisi": t_data["butce_kategorisi"],
-                    })
-                    st.session_state.travel_history.append(plan)
-                    st.session_state.last_plan      = plan
-                    st.session_state.last_aco       = aco_res
-                    st.session_state.last_t_data    = t_data
-                    st.session_state.maliyet_result = mal_res
-
+                # Ajanlar çalışırken her pano mesajı canlı olarak ekrana düşer
+                _ADIMLAR = {"hafiza": "Geçmiş gezilerin hatırlanıyor", "profil": "Seni tanıyoruz",
+                            "plan": "Sana uygun yerler seçiliyor", "elestirmen": "Öneriler kontrol ediliyor",
+                            "rota": "En kısa rota hesaplanıyor", "maliyet": "Bütçen hesaplanıyor"}
+                _gorulen = []
+                with st.status("✈️ Planın hazırlanıyor…", expanded=True) as durum_kutusu:
+                    def _canli(m):
+                        adim = _ADIMLAR.get(m.gonderen)
+                        if adim and adim not in _gorulen:
+                            if _gorulen:
+                                durum_kutusu.write(f"✓ {_gorulen[-1]}")
+                            _gorulen.append(adim)
+                            durum_kutusu.update(label=f"{adim}…")
                     try:
-                        import re as _re_h
-                        _raw_html = (plan.get("html_report") or plan.get("plan_metni")
-                                     or plan.get("transport_details", ""))
-                        _temiz    = _re_h.sub(r'<style[^>]*>.*?</style>', '', _raw_html, flags=_re_h.DOTALL)
-                        _temiz    = _re_h.sub(r'<[^>]+>', ' ', _temiz)
-                        _temiz    = _re_h.sub(r'[ \t]+', ' ', _temiz)
-                        _temiz    = _re_h.sub(r'\n{3,}', '\n\n', _temiz).strip()
+                        sonuc = Orkestrator(dinleyici=_canli).planla(istek, st.session_state.username)
+                    except Exception as e:
+                        durum_kutusu.update(label="Plan oluşturulamadı", state="error")
+                        if isinstance(e, (RuntimeError, ValueError)):      # beklenen durum: sade mesaj
+                            st.warning(str(e), icon="🧭")
+                        else:
+                            st.error("Plan oluşturulurken beklenmeyen bir sorun oluştu. Lütfen tekrar dene.")
+                            import traceback
+                            with st.expander("Teknik detay"):
+                                st.code(traceback.format_exc())
+                        st.stop()
+                    durum_kutusu.update(label="✅ Planın hazır!", state="complete", expanded=False)
 
-                        # Gemini ile temiz Türkçe özet üret
-                        _mbti_oz  = t_data.get("mbti_type", "")
-                        _ai_ozet  = _gemini_generate(
-                            f"Aşağıdaki seyahat planını 4-5 cümleyle Türkçe, akıcı ve samimi bir paragraf "
-                            f"olarak özetle. Sadece metin döndür, HTML veya madde işareti kullanma. "
-                            f"Destinasyon: {hedef.strip()}, Süre: {gun_farki} gün, "
-                            f"Gezgin tipi: {_mbti_oz}. Plan içeriği:\n{_temiz[:3000]}"
-                        )
-                        _ozet_txt = _ai_ozet.strip() if _ai_ozet else _temiz[:600]
+                kis = sonuc["maliyet"]["kisisel"]["kalemler"]
+                # Ülke yazıldıysa plan seçilen şehirde kurulur: "Barcelona (İspanya)"
+                if sonuc["istek"].get("hedef_girdi"):
+                    _g = sonuc["istek"]["hedef_girdi"].strip()
+                    _g = ("İ" if _g[:1] == "i" else _g[:1].upper()) + _g[1:]     # Türkçe büyük harf: ispanya → İspanya
+                    hedef = f"{sonuc['istek']['sehir']} ({_g})"
+                    t_data["destination"] = hedef
+                plan = {
+                    "destination":       hedef.strip(),
+                    "duration_days":     gun_farki,
+                    "estimated_cost":    kis["toplam"],
+                    "transport_details": "",
+                    "html_report":       gunluk_html(sonuc),
+                    "start_date": str(bas), "end_date": str(bit),
+                    "group_size": int(kisi), "transport": ulasim_sec,
+                    "butce_kategorisi": butce_kat,
+                    "sonuc": sonuc,
+                }
+                plan["plan_metni"] = plan["html_report"]
+                st.session_state.travel_history.append(plan)
+                st.session_state.last_plan      = plan
+                st.session_state.last_t_data    = t_data
 
-                        save_travel_history(st.session_state.username, {
-                            "destination":    hedef.strip(),
-                            "start_date":     str(bas),
-                            "end_date":       str(bit),
-                            "duration_days":  gun_farki,
-                            "group_size":     int(kisi),
-                            "transport":      t_data.get("transport", ""),
-                            "budget":         butce_kat,
-                            "mbti_type":      t_data["mbti_type"],
-                            "estimated_cost": mal_res.get("ozel_plan", {}).get("toplam", 0),
-                            "plan_ozeti":     _ozet_txt,
-                            "full_plan":      plan,
-                        })
-                    except Exception:
-                        pass
-
-                    progress.empty(); status.empty()
-                    go_tab(2); st.rerun()
-
+                try:
+                    duraklar = [p["isim"] for g in sonuc["rota"]["gunler"] for p in g["duraklar"]]
+                    ozet = (f"{hedef.strip()} · {gun_farki} gün · {len(duraklar)} durak: "
+                            + ", ".join(duraklar[:6]) + ("…" if len(duraklar) > 6 else "")
+                            + f". {sonuc['profil'].get('seyahat_notu', '')}")
+                    plan_id = save_travel_history(st.session_state.username, {
+                        "destination":    hedef.strip(),
+                        "start_date":     str(bas),
+                        "end_date":       str(bit),
+                        "duration_days":  gun_farki,
+                        "group_size":     int(kisi),
+                        "transport":      ulasim_sec,
+                        "budget":         butce_kat,
+                        "mbti_type":      t_data["mbti_type"],
+                        "estimated_cost": kis["toplam"],
+                        "plan_ozeti":     ozet[:1200],
+                        "full_plan":      plan,
+                    })
+                    hafizaya_kaydet(st.session_state.username, sonuc, plan_id)
+                    plan["_id"] = plan_id
                 except Exception as e:
-                    progress.empty(); status.empty()
-                    st.error(f"Hata: {e}")
-                    import traceback
-                    with st.expander("Teknik Detay"):
-                        st.code(traceback.format_exc())
+                    st.warning(f"Plan oluşturuldu ama hafızaya kaydedilemedi: {e}")
+
+                go_tab(2); st.rerun()
 
     with right:
         mbti_cur = st.session_state.user_data.get("mbti_type", "?")
@@ -1449,6 +1285,36 @@ elif cur == 1:
     <div style="font-size:12px;color:#374151;line-height:1.75">{blog}</div>
   </div>
 </div>""", unsafe_allow_html=True)
+
+        # ── Hafıza paneli: ajanlara ne geri beslenecek? ───────────────────────
+        _hz = memory.hafiza_baglami(st.session_state.username)
+        _sehirler = _hz["ziyaret_edilen_yerler"]
+        _sehir_satir = "".join(
+            f'<div style="display:flex;justify-content:space-between;font-size:11.5px;padding:4px 0;'
+            f'border-bottom:1px solid #f3efe9"><span>{_html.escape(str(_s))}</span><span style="color:#8b7355;font-weight:700">'
+            f'{len(set(_y))} yer</span></div>'
+            for _s, _y in list(_sehirler.items())[:6])
+        _fb = len(_hz["geri_bildirimler"])
+        st.markdown(f"""
+<div style="background:#fffefb;border:1px solid #e8dfd4;border-radius:14px;padding:16px 18px;margin-top:14px">
+  <div style="font-size:10px;font-weight:800;color:#8b7355;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">
+    💾 Seni hatırlıyoruz</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px">
+    <div style="background:#f2ede6;border-radius:8px;padding:8px;text-align:center">
+      <div style="font-size:18px;font-weight:900;color:#2c2416">{_hz['seyahat_sayisi']}</div>
+      <div style="font-size:9.5px;color:#7a6a5a">seyahat</div></div>
+    <div style="background:#eef0eb;border-radius:8px;padding:8px;text-align:center">
+      <div style="font-size:18px;font-weight:900;color:#2c2416">{sum(len(set(v)) for v in _sehirler.values())}</div>
+      <div style="font-size:9.5px;color:#7a6a5a">gidilen yer</div></div>
+    <div style="background:#f5ede6;border-radius:8px;padding:8px;text-align:center">
+      <div style="font-size:18px;font-weight:900;color:#2c2416">{_fb}</div>
+      <div style="font-size:9.5px;color:#7a6a5a">geri bildirim</div></div>
+  </div>
+  {_sehir_satir or '<div style="font-size:11.5px;color:#9a8a7a">Henüz kayıtlı gezi yok — ilk planından sonra burada görünecek.</div>'}
+  <div style="font-size:10.5px;color:#9a8a7a;margin-top:8px;line-height:1.5">
+    Daha önce gittiğin yerler tekrar önerilmez; gezi sonrası yorumların bir sonraki planı şekillendirir.</div>
+</div>""", unsafe_allow_html=True)
+
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1498,7 +1364,6 @@ elif cur == 2:
             "singapur":  ["Marina Bay Sands","Gardens by the Bay","Merlion","Sentosa Island","Chinatown, Singapore","Clarke Quay","Singapore Botanic Gardens"],
             "marakes":   ["Jemaa el-Fna","Koutoubia","Bahia Palace","Medina of Marrakesh","Majorelle Garden","Saadian Tombs","Mouassine Fountain"],
             "bali":      ["Tanah Lot","Uluwatu Temple","Tegallalang Rice Terraces","Sacred Monkey Forest Sanctuary","Besakih Temple","Tirta Empul","Pura Luhur Batukaru"],
-            "singapur":  ["Marina Bay Sands","Gardens by the Bay","Merlion","Sentosa Island","Chinatown, Singapore","Clarke Quay","Singapore Botanic Gardens"],
             "salzburg":  ["Hohensalzburg Fortress","Mirabell Palace","Mozart Birthplace","Hellbrunn Palace","Untersberg"],
             "floransa":  ["Uffizi Gallery","Florence Cathedral","Ponte Vecchio","Piazzale Michelangelo","Palazzo Vecchio","Baptistery of Saint John"],
             "lizbon":    ["Belém Tower","Jerónimos Monastery","Sintra","Alfama","LX Factory","Praça do Comércio"],
@@ -1601,6 +1466,50 @@ elif cur == 2:
   </div>
 </div>
 """, unsafe_allow_html=True)
+
+        # ── Çok ajanlı plan: seyahat notu, bütçe durumu, harita ───────────────
+        _sonuc2 = plan.get("sonuc")
+        if _sonuc2:
+            if _sonuc2.get("hedef_notu"):
+                st.info(_sonuc2["hedef_notu"], icon="📍")
+            st.markdown(seyahat_notu_karti(_sonuc2), unsafe_allow_html=True)
+            st.markdown(plan_ozet_html(_sonuc2), unsafe_allow_html=True)
+            if _sonuc2.get("haric_tutulan"):
+                st.caption("🔁 Hafızadan dolayı tekrar önerilmeyen yerler: "
+                           + ", ".join(dict.fromkeys(_sonuc2["haric_tutulan"]))[:400])
+            try:
+                import pydeck as _pdk
+                _renkler = [[139, 115, 85], [212, 151, 106], [79, 107, 79], [79, 70, 229],
+                            [190, 75, 120], [8, 145, 178], [202, 138, 4]]
+                _merkez = _sonuc2["rota"]["merkez"]
+                _yollar, _noktalar = [], []
+                for _g in _sonuc2["rota"]["gunler"]:
+                    _r = _renkler[(_g["gun"] - 1) % len(_renkler)]
+                    _yol = [[_merkez["lon"], _merkez["lat"]]] + [[p["lon"], p["lat"]] for p in _g["duraklar"]] \
+                           + [[_merkez["lon"], _merkez["lat"]]]
+                    _yollar.append({"path": _yol, "renk": _r, "ad": f"Gün {_g['gun']}"})
+                    for _i, p in enumerate(_g["duraklar"], start=1):
+                        _noktalar.append({"lon": p["lon"], "lat": p["lat"], "renk": _r,
+                                          "ad": f"Gün {_g['gun']} · {_i}. {p['isim']}", "no": str(_i)})
+                _noktalar.append({"lon": _merkez["lon"], "lat": _merkez["lat"], "renk": [30, 30, 30],
+                                  "ad": "Konaklama bölgesi (başlangıç)", "no": "H"})
+                st.pydeck_chart(_pdk.Deck(
+                    map_provider="carto", map_style="light",
+                    initial_view_state=_pdk.ViewState(latitude=_merkez["lat"], longitude=_merkez["lon"], zoom=12.3),
+                    layers=[
+                        _pdk.Layer("PathLayer", _yollar, get_path="path", get_color="renk",
+                                   width_min_pixels=3, pickable=True),
+                        _pdk.Layer("ScatterplotLayer", _noktalar, get_position=["lon", "lat"],
+                                   get_fill_color="renk", get_radius=70, radius_min_pixels=7, pickable=True),
+                        _pdk.Layer("TextLayer", _noktalar, get_position=["lon", "lat"], get_text="no",
+                                   get_size=13, get_color=[255, 255, 255], get_alignment_baseline="'center'"),
+                    ],
+                    tooltip={"text": "{ad}"},
+                ), height=380)
+                st.caption("Haritadaki numaralar ziyaret sırasıdır; her gün ayrı renkte. "
+                           "Harita: © OpenStreetMap katkıcıları, © CARTO")
+            except Exception:
+                pass
 
         # ── Carousel ──────────────────────────────────────────────────────────
         DEST_ACIKLAMA = {
@@ -1817,331 +1726,149 @@ elif cur == 2:
         else:
             st.json(plan)
 
+        # ── Planın devamı: bütçe, yeme-içme, yedek yerler, ipuçları ──────────
+        if _sonuc2:
+            st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+            _sol, _sag = st.columns([1, 1], gap="medium")
+            with _sol:
+                st.markdown(butce_dokum_html(_sonuc2), unsafe_allow_html=True)
+            with _sag:
+                st.markdown(ipuclari_html(_sonuc2), unsafe_allow_html=True)
+                st.markdown(restoran_listesi_html(_sonuc2), unsafe_allow_html=True)
+            st.markdown(yedek_yerler_html(_sonuc2), unsafe_allow_html=True)
+            if st.button("🧳 Gezi hazırlığına geç", type="primary"):
+                go_tab(3); st.rerun()
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # SEKME 3 — ACO & MALİYET
 # ════════════════════════════════════════════════════════════════════════════
 
 elif cur == 3:
-    page_header("ACO & Maliyet Analizi")
-    if not st.session_state.last_aco and not st.session_state.maliyet_result:
-        st.info("Önce bir plan oluşturun.")
+    page_header("Gezi Hazırlığı", "Tatil listen ve günlük harcama planın")
+    _s3 = (st.session_state.last_plan or {}).get("sonuc")
+    if not _s3:
+        st.info("Önce Rota Formu'ndan bir plan oluştur — hazırlık listesi planına ve profiline göre hazırlanır.")
     else:
-        import re as _re2
-        aco = st.session_state.last_aco or {}
-        mal = st.session_state.maliyet_result
-        t_d = st.session_state.last_t_data or {}
+        _i3 = _s3["istek"]
+        _anahtar = f"{_i3['sehir']}|{_i3.get('baslangic', '')}|{_i3['gun']}|{_s3['maliyet']['kisisel']['kalemler']['toplam']}"
+        import hashlib as _hl
+        _hk = _hl.md5(_anahtar.encode()).hexdigest()[:8]
+        _isaretli = memory.hazirlik_oku(st.session_state.username, _anahtar)
+        _tatil = hazirlik.tatil_listesi(_s3)
+        _tum_maddeler = [f"t:{m}" for _, liste in _tatil for m in liste]
+        _biten = sum(1 for m in _tum_maddeler if m in _isaretli)
 
-        col_aco, col_mal = st.columns([6, 4], gap="large")
-
-        # ── ACO sütunu ────────────────────────────────────────────────────────
-        with col_aco:
-            route     = (aco.get("optimized_route") or aco.get("locations") or [])
-            opt_path  = aco.get("optimized_path", [r.get("name","") if isinstance(r,dict) else str(r) for r in route])
-            mesafe    = float(aco.get("tahmini_toplam_mesafe_km") or aco.get("total_distance") or 0)
-            raw_score = aco.get("rota_uyumluluk_skoru") or aco.get("optimization_score") or 0
-            try:
-                score = float(str(raw_score).replace("%","")) / (100 if "%" in str(raw_score) else 1)
-            except Exception:
-                score = 0.0
-            n      = len(route)
-            mbti_p = t_d.get("mbti_type", t_d.get("user_profile",{}).get("mbti_type","?"))
-            dest   = t_d.get("destination","?").capitalize()
-
-            st.markdown(f"""
-<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">
-  <div style="background:#f2ede6;border:1px solid #e8dfd4;border-radius:12px;padding:14px;
-              text-align:center;border-top:3px solid #8b7355">
-    <div style="font-size:10px;color:#7a6a5a;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Mekan</div>
-    <div style="font-size:26px;font-weight:900;color:#2c2416;line-height:1">{n}</div>
-  </div>
-  <div style="background:#eef0eb;border:1px solid #dde5d8;border-radius:12px;padding:14px;
-              text-align:center;border-top:3px solid #9eaa8f">
-    <div style="font-size:10px;color:#7a6a5a;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Mesafe</div>
-    <div style="font-size:26px;font-weight:900;color:#2c2416;line-height:1">{mesafe:.0f}</div>
-    <div style="font-size:10px;color:#7a6a5a">km</div>
-  </div>
-  <div style="background:#f5ede6;border:1px solid #e8dfd4;border-radius:12px;padding:14px;
-              text-align:center;border-top:3px solid #d4976a">
-    <div style="font-size:10px;color:#7a6a5a;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Skor</div>
-    <div style="font-size:26px;font-weight:900;color:#2c2416;line-height:1">{int(score*100)}</div>
-    <div style="font-size:10px;color:#7a6a5a">/ 100</div>
-  </div>
-  <div style="background:linear-gradient(135deg,#2d221a,#5a3e2d);border-radius:12px;padding:14px;text-align:center">
-    <div style="font-size:10px;color:rgba(255,255,255,0.65);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">MBTI</div>
-    <div style="font-size:20px;font-weight:900;color:white;line-height:1">{mbti_p}</div>
-  </div>
-</div>""", unsafe_allow_html=True)
-
-            # SVG harita — koordinat gerekmez, her zaman göster
-            if route:
-                svg_html = _draw_route_svg(route, opt_path, dest=dest)
-                if svg_html:
-                    st.markdown(f"""
-<div style="background:#faf8f5;border:1px solid #e8dfd4;border-radius:14px;
-            padding:14px 18px;margin-bottom:18px">
-  <div style="font-size:11px;font-weight:700;color:#8b7355;text-transform:uppercase;
-              letter-spacing:0.5px;margin-bottom:10px">ACO Optimize Rota — {dest}</div>
-  {svg_html}
-  <div style="margin-top:8px;font-size:10.5px;color:#b5a99a;display:flex;align-items:center;gap:6px">
-    <span style="display:inline-block;width:18px;height:2px;background:#8b7355;border-radius:1px"></span>
-    Feromon izi (animasyonlu)
-    <span style="margin-left:8px;display:inline-block;width:10px;height:10px;
-                 background:#8b7355;border-radius:50%;vertical-align:middle"></span> Başlangıç
-    <span style="display:inline-block;width:10px;height:10px;
-                 background:#d4976a;border-radius:50%;vertical-align:middle"></span> Son Durak
-  </div>
-</div>""", unsafe_allow_html=True)
-
-            # ACO parametre kutuları
-            _n_ant   = int(aco.get("n_ants")    or aco.get("n_karinca") or 10)
-            _n_iter  = int(aco.get("n_iter")    or aco.get("iterasyon") or 5)
-            _evap    = float(aco.get("evaporation") or aco.get("buharlasma") or 0.50)
-            _alpha   = float(aco.get("alpha")   or 1.0)
-            _beta    = float(aco.get("beta")    or 2.0)
-            st.markdown(f"""
-<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:16px">
-  <div style="background:#faf8f5;border:1px solid #e8dfd4;border-radius:10px;padding:10px 6px;text-align:center">
-    <div style="font-size:9px;color:#8b7355;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;margin-bottom:4px">🐜 Karınca</div>
-    <div style="font-size:20px;font-weight:900;color:#2c2416">{_n_ant}</div>
-  </div>
-  <div style="background:#faf8f5;border:1px solid #e8dfd4;border-radius:10px;padding:10px 6px;text-align:center">
-    <div style="font-size:9px;color:#8b7355;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;margin-bottom:4px">🔄 İterasyon</div>
-    <div style="font-size:20px;font-weight:900;color:#2c2416">{_n_iter}</div>
-  </div>
-  <div style="background:#faf8f5;border:1px solid #e8dfd4;border-radius:10px;padding:10px 6px;text-align:center">
-    <div style="font-size:9px;color:#8b7355;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;margin-bottom:4px">💨 Buharlaşma</div>
-    <div style="font-size:20px;font-weight:900;color:#2c2416">{_evap:.2f}</div>
-  </div>
-  <div style="background:#faf8f5;border:1px solid #e8dfd4;border-radius:10px;padding:10px 6px;text-align:center">
-    <div style="font-size:9px;color:#8b7355;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;margin-bottom:4px">α Feromon</div>
-    <div style="font-size:20px;font-weight:900;color:#2c2416">{_alpha:.1f}</div>
-  </div>
-  <div style="background:#faf8f5;border:1px solid #e8dfd4;border-radius:10px;padding:10px 6px;text-align:center">
-    <div style="font-size:9px;color:#8b7355;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;margin-bottom:4px">β Mesafe</div>
-    <div style="font-size:20px;font-weight:900;color:#2c2416">{_beta:.1f}</div>
-  </div>
-</div>""", unsafe_allow_html=True)
-
-            # ── ACO Rota Analizi — kullanıcı dostu ────────────────────────────
-            if route:
-                import urllib.parse as _up
-                rota_renk = {"kultur":"#8b7355","doga":"#9eaa8f","alisveris":"#d4976a","sosyal":"#b5a99a","genel":"#c4b5a0"}
-                # opt_path bazen string isim bazen int indeks içerebilir — normalize et
-                _all_names = [r.get("name","") if isinstance(r,dict) else str(r) for r in route]
-                if opt_path and isinstance(opt_path[0], int):
-                    names_list = [_all_names[i] for i in opt_path if i < len(_all_names)]
-                elif opt_path:
-                    names_list = [str(x) for x in opt_path]
-                else:
-                    names_list = _all_names
-
-                # Konvergensi çubuğu (SVG)
-                _score_raw = score if score <= 1 else score / 100
-                _bars = ""
-                import random as _rnd
-                _seed_rnd = _rnd.Random(len(names_list) * 7 + int(_score_raw * 100))
-                _bar_vals = [max(0.35, _score_raw * _seed_rnd.uniform(0.45 + i*0.06, 0.65 + i*0.08)) for i in range(_n_iter)]
-                _bar_vals[-1] = _score_raw
-                _bw = 420 / max(_n_iter, 1)
-                for _bi, _bv in enumerate(_bar_vals):
-                    _bh = max(8, int(_bv * 80))
-                    _bc = "#d4976a" if _bi == _n_iter-1 else "#b5a99a"
-                    _bars += (f'<rect x="{_bi*_bw+2}" y="{90-_bh}" width="{_bw-4}" height="{_bh}" '
-                              f'rx="3" fill="{_bc}" opacity="0.85"/>'
-                              f'<text x="{_bi*_bw+_bw/2}" y="106" text-anchor="middle" '
-                              f'font-size="9" fill="#b5a99a">{_bi+1}</text>')
-                _conv_svg = (f'<svg width="420" height="110" xmlns="http://www.w3.org/2000/svg">'
-                             f'{_bars}'
-                             f'<text x="0" y="10" font-size="9" fill="#8b7355" font-weight="700">Skor</text>'
-                             f'<text x="420" y="10" font-size="9" fill="#8b7355" text-anchor="end">'
-                             f'{int(_score_raw*100)}/100</text>'
-                             f'</svg>')
-
-                # Kategori dağılımı
-                _type_counts = {}
-                for _lo in route:
-                    _lt = (_lo.get("type","genel") if isinstance(_lo,dict) else "genel")
-                    _type_counts[_lt] = _type_counts.get(_lt, 0) + 1
-                _type_label = {"kultur":"Kültür","doga":"Doğa","alisveris":"Alışveriş",
-                               "sosyal":"Sosyal","yemek":"Yemek","genel":"Genel"}
-                _kat_html = "".join(
-                    f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
-                    f'<div style="width:8px;height:8px;border-radius:50%;background:{rota_renk.get(_t,"#c4b5a0")};flex-shrink:0"></div>'
-                    f'<div style="font-size:11.5px;color:#4a3f35;flex:1">{_type_label.get(_t,_t.capitalize())}</div>'
-                    f'<div style="font-size:11.5px;font-weight:700;color:#2c2416">{_c} durak</div>'
-                    f'</div>'
-                    for _t, _c in sorted(_type_counts.items(), key=lambda x: -x[1])
-                )
-
-                # Algoritma özeti
-                _first = names_list[0] if names_list else "—"
-                _last  = names_list[-1] if names_list else "—"
-                _top3  = " → ".join(names_list[:3]) + (" → ..." if len(names_list) > 3 else "")
-                _kalite = "Mükemmel" if _score_raw >= 0.85 else ("İyi" if _score_raw >= 0.65 else "Orta")
-                _kalite_clr = "#9eaa8f" if _score_raw >= 0.85 else ("#d4976a" if _score_raw >= 0.65 else "#b5a99a")
-
-                st.markdown(f"""
-<div style="margin-bottom:14px">
-  <div style="font-size:11px;font-weight:700;color:#8b7355;text-transform:uppercase;
-              letter-spacing:0.5px;margin-bottom:8px">📈 İterasyon Boyunca Skor Gelişimi</div>
-  <div style="background:#faf8f5;border:1px solid #e8dfd4;border-radius:12px;
-              padding:14px;overflow:hidden">
-    {_conv_svg}
-    <div style="font-size:10.5px;color:#b5a99a;margin-top:4px">
-      {_n_ant} karınca, {_n_iter} iterasyon sonunda en düşük maliyetli rota bulundu.
-      Feromon izi buharlaşma oranı {_evap:.0%} ile dengeye ulaştı.
-    </div>
-  </div>
-</div>
-
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-  <div style="background:#faf8f5;border:1px solid #e8dfd4;border-radius:12px;padding:14px">
-    <div style="font-size:11px;font-weight:700;color:#8b7355;text-transform:uppercase;
-                letter-spacing:0.5px;margin-bottom:10px">📊 Mekan Dağılımı</div>
-    {_kat_html if _kat_html else '<div style="font-size:12px;color:#b5a99a">Kategori verisi yok.</div>'}
-  </div>
-  <div style="background:#faf8f5;border:1px solid #e8dfd4;border-radius:12px;padding:14px">
-    <div style="font-size:11px;font-weight:700;color:#8b7355;text-transform:uppercase;
-                letter-spacing:0.5px;margin-bottom:10px">🧭 Rota Özeti</div>
-    <div style="font-size:11.5px;color:#4a3f35;margin-bottom:8px;line-height:1.6">
-      <b>Başlangıç:</b> {_first}<br>
-      <b>Bitiş:</b> {_last}<br>
-      <b>Toplam Durak:</b> {len(names_list)}<br>
-      <b>Rota Kalitesi:</b> <span style="color:{_kalite_clr};font-weight:700">{_kalite}</span>
-    </div>
-    <div style="font-size:10.5px;color:#b5a99a;border-top:1px solid #e8dfd4;
-                padding-top:8px;line-height:1.6">
-      İlk 3 durak: {_top3}
-    </div>
-  </div>
-</div>
-
-<div style="background:linear-gradient(135deg,#faf8f5,#f5f0e8);border:1px solid #e8dfd4;
-            border-radius:12px;padding:14px;margin-bottom:14px">
-  <div style="font-size:11px;font-weight:700;color:#8b7355;text-transform:uppercase;
-              letter-spacing:0.5px;margin-bottom:8px">💡 Algoritma Ne Yaptı?</div>
-  <div style="font-size:12px;color:#4a3f35;line-height:1.75">
-    {_n_ant} sanal karınca, {dest} içindeki {len(names_list)} mekanı <b>{_n_iter} iterasyon</b>
-    boyunca farklı sıralarda gezdi. Her turda en kısa ve en az maliyetli yolu bırakmak üzere
-    <b>feromon izi</b> bıraktı. Daha iyi rotalar çok iz bırakırken kötü yollar
-    <b>{_evap:.0%} buharlaşma</b> ile unutuldu. Sonunda yüksek yoğunluklu feromon
-    izleriyle ortaya çıkan sıra sizin <b>optimize rotanızdır</b>.
-  </div>
-</div>""", unsafe_allow_html=True)
-
-        # ── Maliyet sütunu ────────────────────────────────────────────────────
-        with col_mal:
-            if not mal:
-                st.markdown("""
-<div style="background:#f2ede6;border:1px solid #e8dfd4;border-radius:12px;
-            padding:32px;text-align:center;color:#7a6a5a;font-size:13px">
-  Maliyet verisi henüz yok.
-</div>""", unsafe_allow_html=True)
-            else:
-                std = mal["standart_plan"]
-                oz  = mal["ozel_plan"]
-                tas = mal["tasarruf_tl"]
-                yuz = mal["tasarruf_yuzde"]
-
-                st.markdown(f"""
-<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
-  <div style="background:white;border:1px solid #e8dfd4;border-radius:12px;padding:14px;
-              text-align:center;border-top:3px solid #b5a99a">
-    <div style="font-size:10px;color:#7a6a5a;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Standart</div>
-    <div style="font-size:15px;font-weight:800;color:#b5a99a;text-decoration:line-through">{std["toplam"]:,.0f}</div>
-    <div style="font-size:10px;color:#7a6a5a">TL</div>
-  </div>
-  <div style="background:white;border:1px solid #e8dfd4;border-radius:12px;padding:14px;
-              text-align:center;border-top:3px solid #8b7355">
-    <div style="font-size:10px;color:#7a6a5a;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Kişisel</div>
-    <div style="font-size:15px;font-weight:800;color:#2c2416">{oz["toplam"]:,.0f}</div>
-    <div style="font-size:10px;color:#7a6a5a">TL</div>
-  </div>
-  <div style="background:linear-gradient(135deg,#eef0eb,#d8e5d0);border:1px solid #c0d0b8;
-              border-radius:12px;padding:14px;text-align:center">
-    <div style="font-size:10px;color:#5a7a5a;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Tasarruf</div>
-    <div style="font-size:15px;font-weight:800;color:#3d6b3d">%{yuz:.1f}</div>
-    <div style="font-size:10px;color:#5a7a5a">{tas:,.0f} TL</div>
-  </div>
-</div>""", unsafe_allow_html=True)
-
-                # Bar chart breakdown
-                kalemler = [
-                    ("Konaklama",        "konaklama",    "#8b7355"),
-                    ("Yemek",            "yemek",         "#d4976a"),
-                    ("Şehir İçi Ulaşım", "sehir_ulasim",  "#9eaa8f"),
-                    ("Aktivite",         "aktivite",      "#c4a882"),
-                    ("Şehirlerarası",    "sehirlerarasi", "#b5a99a"),
-                ]
-                satirlar = ""
-                for label, key, renk in kalemler:
-                    sv   = std.get(key, 0)
-                    ov   = oz.get(key, 0)
-                    barw = max(4, round(ov / sv * 100)) if sv > 0 else 100
-                    satirlar += f"""
-<div style="padding:10px 0;border-bottom:1px solid #f0ebe4">
-  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
-    <span style="font-size:12px;color:#4a3f35;font-weight:500">{label}</span>
-    <div style="text-align:right">
-      <span style="font-size:11px;color:#b5a99a;text-decoration:line-through">{sv:,.0f}</span>
-      <span style="font-size:12px;font-weight:700;color:#2c2416;margin-left:6px">{ov:,.0f} TL</span>
-    </div>
-  </div>
-  <div style="background:#e8dfd4;border-radius:4px;height:5px">
-    <div style="background:linear-gradient(90deg,{renk},{renk}88);border-radius:4px;height:5px;width:{barw}%"></div>
-  </div>
-</div>"""
-                tot_html = f"""
-<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0 0">
-  <span style="font-size:13px;font-weight:700;color:#2c2416">Toplam</span>
+        _kg = hazirlik.kalan_gun(_i3.get("baslangic", ""))
+        if _kg is None:
+            _kg_txt = ""
+        elif _kg > 1:
+            _kg_txt = f"Yolculuğa <b>{_kg} gün</b> kaldı"
+        elif _kg == 1:
+            _kg_txt = "Yolculuk <b>yarın</b>!"
+        elif _kg == 0:
+            _kg_txt = "Bugün yola çıkıyorsun — iyi yolculuklar!"
+        else:
+            _kg_txt = "Bu gezi tamamlandı — Seyahatlerim sekmesinden nasıl geçtiğini anlat."
+        _yuzde = int(_biten / max(1, len(_tum_maddeler)) * 100)
+        st.markdown(f"""
+<div style="background:linear-gradient(135deg,#2d221a,#5a3e2d);border-radius:16px;padding:20px 24px;color:white;
+            display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;gap:16px">
   <div>
-    <span style="font-size:12px;color:#b5a99a;text-decoration:line-through">{std["toplam"]:,.0f}</span>
-    <span style="font-size:15px;font-weight:800;color:#2c2416;margin-left:8px">{oz["toplam"]:,.0f} TL</span>
+    <div style="font-size:10px;opacity:.6;text-transform:uppercase;letter-spacing:.6px">Hazırlık</div>
+    <div style="font-size:24px;font-weight:800;margin:4px 0">{_html.escape(_i3['sehir'])} · {_i3['gun']} gün · {_i3['kisi']} kişi</div>
+    <div style="font-size:13px;opacity:.85">{_kg_txt}</div>
   </div>
-</div>"""
-                st.markdown(f"""
-<div style="background:white;border:1px solid #e8dfd4;border-radius:12px;padding:18px;margin-bottom:14px">
-  <div style="font-size:12px;font-weight:700;color:#2c2416;margin-bottom:4px;
-              text-transform:uppercase;letter-spacing:0.4px">Maliyet Kalemleri</div>
-  {satirlar}
-  {tot_html}
+  <div style="text-align:right;min-width:150px">
+    <div style="font-size:28px;font-weight:900">%{_yuzde}</div>
+    <div style="font-size:11px;opacity:.7">{_biten}/{len(_tum_maddeler)} madde hazır</div>
+    <div style="background:rgba(255,255,255,.18);border-radius:6px;height:7px;margin-top:6px">
+      <div style="background:#e8c99a;height:7px;border-radius:6px;width:{_yuzde}%"></div></div>
+  </div>
 </div>""", unsafe_allow_html=True)
 
-                st.markdown(f"""
-<div style="background:#eef0eb;border:1px solid #c0d0b8;border-radius:12px;
-            padding:14px 18px;text-align:center;margin-bottom:14px">
-  <div style="font-size:11px;color:#3d6b3d;font-weight:600;text-transform:uppercase;
-              letter-spacing:0.4px;margin-bottom:4px">Toplam Tasarruf</div>
-  <div style="font-size:22px;font-weight:800;color:#3d6b3d">{tas:,.0f} TL</div>
-  <div style="font-size:12px;color:#5a7a5a;margin-top:2px">Standart plana göre %{yuz:.1f} daha ekonomik</div>
-</div>""", unsafe_allow_html=True)
+        def _isaret_degisti(madde, anahtar_widget):
+            secili = memory.hazirlik_oku(st.session_state.username, _anahtar)
+            if st.session_state.get(anahtar_widget):
+                secili.add(madde)
+            else:
+                secili.discard(madde)
+            memory.hazirlik_kaydet(st.session_state.username, _anahtar, secili)
 
-                detay = mal.get("detayli_maliyet_analizi", "")
-                if detay:
-                    lines   = [l.strip() for l in detay.strip().splitlines() if l.strip()]
-                    det_html = ""
-                    for line in lines:
-                        if line.startswith("###"):
-                            det_html += f'<div style="font-size:12px;font-weight:700;color:#2c2416;margin:12px 0 4px">{line.lstrip("#").strip()}</div>'
-                        elif line.startswith("##") or line.startswith("**Toplam"):
-                            pass
-                        elif line.startswith("-") or line.startswith("  ·"):
-                            txt = line.lstrip("- ·").strip().replace("**","")
-                            det_html += f'<div style="font-size:12px;color:#4a3f35;padding:3px 0;border-bottom:1px solid #f5f0ea;display:flex;gap:6px"><span style="color:#b5a99a;flex-shrink:0">›</span><span>{txt}</span></div>'
-                        elif ":" in line and not line.startswith("**"):
-                            parts = line.split(":",1)
-                            det_html += f'<div style="font-size:12px;color:#4a3f35;padding:3px 0;border-bottom:1px solid #f5f0ea;display:flex;justify-content:space-between"><span style="color:#7a6a5a">{parts[0].replace("**","").strip()}</span><span style="font-weight:600">{parts[1].replace("**","").strip()}</span></div>'
-                        else:
-                            cl = line.replace("**","")
-                            if cl:
-                                det_html += f'<div style="font-size:11px;color:#7a6a5a;margin:4px 0">{cl}</div>'
-                    st.markdown(f"""
-<div style="background:white;border:1px solid #e8dfd4;border-radius:12px;padding:18px">
-  <div style="font-size:12px;font-weight:700;color:#2c2416;margin-bottom:10px;
-              text-transform:uppercase;letter-spacing:0.4px">Detaylı Kalem Analizi</div>
-  {det_html}
-</div>""", unsafe_allow_html=True)
+        def _poster():
+            """Tatil listesi: 3 sütunlu kategori kartları + Notlar (uygulamanın kart stilinde)."""
+            with st.container(key="tatil_listesi"):
+                st.markdown(
+                    f'<div class="tl-ust"><div><div class="tl-ust-etiket">✈️ Tatil listesi</div>'
+                    f'<div class="tl-baslik">Her şey hazır, güzel anılar bizi bekliyor</div>'
+                    f'<div class="tl-alt">Planına, mevsime ve tercihlerine göre hazırlandı.</div></div></div>',
+                    unsafe_allow_html=True)
+
+                def kart(anahtar, maddeler):
+                    baslik, ikon, renk = hazirlik.TATIL_KATEGORILERI[anahtar]
+                    biten_k = sum(1 for m in maddeler if f"t:{m}" in _isaretli)
+                    with st.container(key=f"tlkart_{anahtar}"):
+                        st.markdown(
+                            f'<div class="tl-kart-baslik"><span class="tl-ikon" style="background:{renk}">{ikon}</span>'
+                            f'<span class="tl-etiket">{baslik}</span>'
+                            f'<span class="tl-sayac">{biten_k}/{len(maddeler)}</span></div>', unsafe_allow_html=True)
+                        for i, madde in enumerate(maddeler):
+                            wk = f"hz_{_hk}_{anahtar}_{i}"
+                            st.checkbox(madde, value=f"t:{madde}" in _isaretli, key=wk,
+                                        on_change=_isaret_degisti, args=(f"t:{madde}", wk))
+                        st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
+
+                kartlar = list(_tatil)
+                son_satir = kartlar[-1:] if len(kartlar) % 3 == 1 else (kartlar[-2:] if len(kartlar) % 3 == 2 else [])
+                ust = kartlar[:len(kartlar) - len(son_satir)] if son_satir else kartlar
+                for r in range(0, len(ust), 3):
+                    for kol, (a, m) in zip(st.columns(3, gap="medium"), ust[r:r + 3]):
+                        with kol:
+                            kart(a, m)
+                    st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
+
+                # Son satır: kalan kart(lar) + Notlar kartı (fotoğraftaki gibi)
+                oranlar = [1] * len(son_satir) + [3 - len(son_satir)] if son_satir else [1]
+                kolonlar = st.columns(oranlar, gap="medium")
+                for kol, (a, m) in zip(kolonlar, son_satir):
+                    with kol:
+                        kart(a, m)
+                with kolonlar[-1]:
+                    with st.container(key="tlkart_notlar"):
+                        st.markdown('<div class="tl-kart-baslik"><span class="tl-ikon" style="background:#f2ede6">📝</span>'
+                                    '<span class="tl-etiket">Notlar</span></div>', unsafe_allow_html=True)
+                        nk = f"hz_{_hk}_not"
+                        st.text_area("Notlar", value=memory.hazirlik_not_oku(st.session_state.username, _anahtar),
+                                     key=nk, height=130, label_visibility="collapsed",
+                                     placeholder="Unutmamak istediğin bir şey yaz…",
+                                     on_change=lambda: memory.hazirlik_not_kaydet(
+                                         st.session_state.username, _anahtar, st.session_state.get(nk, "")))
+                st.markdown('<div class="tl-alt-yazi">İyi tatiller ✈️</div>', unsafe_allow_html=True)
+
+        _gh = hazirlik.gunluk_harcama(_s3)
+        _gunluk_ort = sum(r["Toplam"] for r in _gh) / max(1, len(_gh))
+
+        _t1, _t3 = st.tabs([f"📝 Tatil Listesi  {_biten}/{len(_tum_maddeler)}",
+                            f"💳 Günlük harcama  ~{_gunluk_ort:,.0f} TL"])
+        with _t1:
+            _poster()
+        with _t3:
+            st.caption("Kişi başı, gün gün tahmini cep harcaması (yemek, şehir içi ulaşım, giriş ücretleri).")
+            _gk = st.columns(len(_gh)) if len(_gh) <= 4 else None
+            for _gi, _r in enumerate(_gh):
+                _kutu = (f'<div style="background:#fffefb;border:1px solid #e8dfd4;border-radius:14px;padding:14px 16px;'
+                         f'margin-bottom:10px"><div style="font-size:12px;font-weight:800;color:#8b7355;'
+                         f'text-transform:uppercase;letter-spacing:.5px">{_r["Gün"]}</div>'
+                         f'<div style="font-size:24px;font-weight:900;color:#2c2416;margin:4px 0 8px">{_r["Toplam"]:,.0f} TL</div>'
+                         f'<div style="font-size:12px;color:#6b5a48;line-height:1.8">🍽️ Yemek: {_r["Yemek"]:,.0f} TL<br>'
+                         f'🚇 Ulaşım: {_r["Ulaşım"]:,.0f} TL<br>🎟️ Girişler: {_r["Girişler"]:,.0f} TL</div></div>')
+                if _gk:
+                    _gk[_gi].markdown(_kutu, unsafe_allow_html=True)
+                else:
+                    st.markdown(_kutu, unsafe_allow_html=True)
+            _kk = _s3["maliyet"]["kisisel"]["kalemler"]
+            st.caption(f"Konaklama ({_kk['konaklama']:,.0f} TL) ve şehirlerarası ulaşım ({_kk['sehirlerarasi']:,.0f} TL) "
+                       "genelde önceden ödendiği için bu tabloya dahil değildir. Rakamlar tahminidir.")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2149,30 +1876,118 @@ elif cur == 3:
 # ════════════════════════════════════════════════════════════════════════════
 
 elif cur == 4:
-    page_header("Seyahat Geçmişim")
-
-    profile = get_user_profile(st.session_state.username)
+    page_header("Seyahatlerim", "Gezilerin, gittiğin yerler ve seni nasıl tanıdığımız — hepsi bir arada")
+    _u = st.session_state.username
+    profile = get_user_profile(_u)
     history = profile.get("travel_history", [])
+    _hz4 = memory.hafiza_baglami(_u)
+    _ziy4 = memory.ziyaret_edilenler(_u)
+    _mal4 = memory.maliyet_kayitlari(_u)
+    _not4 = memory.notlar(_u, limit=300)
+    _puanlar = [n["puan"] for n in _not4 if n["tur"] == "geri_bildirim" and n.get("puan")]
+    _sehirler4 = {(h.get("destination") or "").strip().title() for h in history} | {(z["sehir"] or "").strip().title() for z in _ziy4}
+    _sehirler4.discard("")
+    _toplam_harcama = sum(float(h.get("estimated_cost") or 0) for h in history)
 
+    # ── Özet ─────────────────────────────────────────────────────────────
+    _m1, _m2, _m3, _m4, _m5 = st.columns(5)
+    _m1.metric("🧳 Seyahat", len(history))
+    _m2.metric("🏙️ Şehir", len(_sehirler4))
+    _m3.metric("📍 Gidilen yer", len({(z["sehir"], z["yer"]) for z in _ziy4}))
+    _m4.metric("💰 Toplam harcama", f"{_toplam_harcama:,.0f} TL", help="Planların tahmini toplamı")
+    _m5.metric("⭐ Memnuniyet", f"{sum(_puanlar) / len(_puanlar):.1f}/5" if _puanlar else "—")
+
+    # ── Harita + seni nasıl tanıyoruz ───────────────────────────────────
+    _hl, _hr = st.columns([3, 2], gap="large")
+    with _hl:
+        st.markdown("#### 🗺️ Gezi haritam")
+        _nokta4 = []
+        _pal = [[139, 115, 85], [212, 151, 106], [79, 107, 79], [79, 70, 229], [190, 75, 120], [8, 145, 178]]
+        _renk_sehir = {}
+        with memory.db._conn() as _c4:
+            _satirlar = _c4.execute("SELECT sehir, yer, lat, lon FROM ziyaret_edilen_yerler "
+                                    "WHERE username=? AND lat IS NOT NULL", (_u,)).fetchall()
+        for _r4 in _satirlar:
+            _rk = _renk_sehir.setdefault(_r4["sehir"], _pal[len(_renk_sehir) % len(_pal)])
+            _nokta4.append({"lat": _r4["lat"], "lon": _r4["lon"], "ad": f"{_r4['yer']} · {_r4['sehir']}", "renk": _rk})
+        if _nokta4:
+            try:
+                import pydeck as _pdk4
+                _lat0 = sum(p["lat"] for p in _nokta4) / len(_nokta4)
+                _lon0 = sum(p["lon"] for p in _nokta4) / len(_nokta4)
+                _yayilim = max(max(p["lat"] for p in _nokta4) - min(p["lat"] for p in _nokta4),
+                               max(p["lon"] for p in _nokta4) - min(p["lon"] for p in _nokta4))
+                _zoom = 12 if _yayilim < 0.1 else 9 if _yayilim < 1 else 6 if _yayilim < 6 else 4
+                st.pydeck_chart(_pdk4.Deck(
+                    map_provider="carto", map_style="light",
+                    initial_view_state=_pdk4.ViewState(latitude=_lat0, longitude=_lon0, zoom=_zoom),
+                    layers=[_pdk4.Layer("ScatterplotLayer", _nokta4, get_position=["lon", "lat"],
+                                        get_fill_color="renk", get_radius=90, radius_min_pixels=6, pickable=True)],
+                    tooltip={"text": "{ad}"}), height=320)
+                st.caption("Planlarındaki bütün duraklar · " + " · ".join(
+                    _html.escape(str(s)) for s in _renk_sehir))
+            except Exception:
+                pass
+        else:
+            st.info("İlk planını oluşturduğunda gittiğin yerler burada haritada görünecek.")
+
+    with _hr:
+        _pr4 = _hz4["onceki_profil"]
+        _mb4 = st.session_state.user_data.get("mbti_type", "")
+        st.markdown("#### 🧠 Seni nasıl tanıyoruz")
+        if _pr4:
+            _ilgi4 = " ".join(
+                f'<span style="background:#eef0eb;color:#4f6b4f;border-radius:20px;padding:3px 10px;font-size:11px;'
+                f'font-weight:600;display:inline-block;margin:2px">{KATEGORI_ETIKET.get(k, k)}</span>'
+                for k in _pr4.get("ilgi_alanlari", [])[:6])
+            _kac4 = " ".join(
+                f'<span style="background:#fbeee4;color:#b0643a;border-radius:20px;padding:3px 10px;font-size:11px;'
+                f'font-weight:600;display:inline-block;margin:2px">✕ {KATEGORI_ETIKET.get(k, k)}</span>'
+                for k in _pr4.get("kacinilacaklar", []))
+            _or4 = "".join(f"<li>{_html.escape(o)}</li>" for o in _pr4.get("gecmis_oruntuler", [])[:4])
+            _tempo4 = {"sakin": "Sakin", "dengeli": "Dengeli", "yogun": "Yoğun"}.get(_pr4.get("tempo"), "-")
+            st.markdown(f"""
+<div style="background:#fffefb;border:1px solid #e8dfd4;border-radius:14px;padding:16px 18px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <span style="font-size:22px;font-weight:900;color:#2c2416">{_html.escape(_mb4) or '—'}</span>
+    <span style="font-size:11px;color:#7a6a5a">{_tempo4} tempo · günde {_pr4.get('gunluk_durak', '-')} durak · {_pr4.get('baslangic_saati', '')}</span>
+  </div>
+  <div style="font-size:12.5px;color:#4a3f35;line-height:1.6;margin-bottom:8px">{_html.escape(_pr4.get('seyahat_tarzi', ''))}</div>
+  <div>{_ilgi4} {_kac4}</div>
+  {f'<ul style="font-size:12px;color:#6b5a48;margin:10px 0 0;padding-left:18px">{_or4}</ul>' if _or4 else ''}
+  <div style="font-size:10.5px;color:#a89580;margin-top:10px">Her plandan ve yorumlarından sonra güncellenir.</div>
+</div>""", unsafe_allow_html=True)
+        else:
+            st.info("İlk planından sonra ilgi alanların, temponu ve kaçındıklarını burada göreceksin.")
+
+    # ── Harcama geçmişi ─────────────────────────────────────────────────
+    if len(_mal4) >= 1:
+        st.markdown("#### 💳 Harcama geçmişim")
+        _grafik = {}
+        for _m in reversed(_mal4):
+            _t = str(_m["tarih"])
+            _etk = f"{_m['sehir']} · {_t[8:10]}.{_t[5:7]}"
+            while _etk in _grafik:
+                _etk += " "
+            _grafik[_etk] = round(_m["kisisel_tl"])
+        st.bar_chart(_grafik, color="#8b7355", horizontal=True,
+                     height=min(60 + 38 * len(_grafik), 320), x_label="TL", y_label="")
+        if _hz4["gunluk_ortalama_harcama_tl"]:
+            st.caption(f"Günlük ortalama harcaman ~{_hz4['gunluk_ortalama_harcama_tl']:,.0f} TL · "
+                       f"bütçeyi aşan plan: {_hz4['butce_asim_sayisi']}")
+
+    # ── Gezi günlüğü ────────────────────────────────────────────────────
+    st.markdown("#### 📖 Gezi günlüğüm")
+    st.caption("Geziden döndükten sonra her planın altındaki “Yorumun bekleniyor” bölümüne kısa bir yorum bırak — "
+               "bir sonraki planın buna göre şekillenir.")
     if not history:
         st.markdown("""
 <div style="background:#fffefb;border:1px solid #e8dfd4;border-radius:12px;
-            padding:48px;text-align:center">
-  <div style="font-size:14px;color:#7a6a5a;margin-bottom:4px">Henüz kayıtlı seyahatiniz yok.</div>
-  <div style="font-size:13px;color:#b5a99a">İlk planınızı oluşturun!</div>
+            padding:36px;text-align:center">
+  <div style="font-size:14px;color:#7a6a5a;margin-bottom:4px">Henüz kayıtlı seyahatin yok.</div>
+  <div style="font-size:13px;color:#b5a99a">İlk planını Rota Formu'ndan oluştur!</div>
 </div>""", unsafe_allow_html=True)
     else:
-        st.markdown(f"""
-<div style="background:#fffefb;border:1px solid #e8dfd4;border-radius:12px;
-            padding:14px 20px;margin-bottom:20px;
-            display:flex;align-items:center;gap:16px">
-  <div style="background:#f2ede6;border-radius:10px;padding:10px 16px;text-align:center">
-    <div style="font-size:22px;font-weight:900;color:#2c2416">{len(history)}</div>
-    <div style="font-size:10px;color:#7a6a5a;font-weight:500">Plan</div>
-  </div>
-  <div style="font-size:13px;font-weight:600;color:#2c2416">Kayıtlı Seyahat Planları</div>
-</div>""", unsafe_allow_html=True)
-
         for h_idx, record in enumerate(reversed(history)):
             dest   = record.get("destination", "Bilinmiyor").capitalize()
             start  = record.get("start_date", "")
@@ -2240,35 +2055,121 @@ elif cur == 4:
                 else:
                     st.caption("Tam görünüm yok (eski kayıt)")
             with col_sil:
-                if st.button("🗑️", key=f"gecmis_sil_{h_idx}", help="Bu planı sil"):
+                if st.button("🗑️", key=f"gecmis_sil_{h_idx}", help="Bu planı ve hafızadaki izlerini sil"):
                     if record.get("_id") is not None:
                         delete_travel_plan(st.session_state.username, record["_id"])
+                        memory.plan_hafizasini_sil(st.session_state.username, record["_id"])
                     st.rerun()
 
-    kayitlar = [k for k in maliyet_gecmisi_oku() if k.get("kullanici") == st.session_state.username]
-    if kayitlar:
-        st.markdown("---")
-        st.markdown(f"""
-<div style="font-size:12px;font-weight:700;color:#2c2416;text-transform:uppercase;
-            letter-spacing:0.4px;margin:16px 0 12px">Harcama İstatistikleri</div>""", unsafe_allow_html=True)
-        toplam = sum(k.get("ozellestirilmis_plan_tl", 0) for k in kayitlar)
-        ort    = sum(k.get("tasarruf_yuzdesi", 0) for k in kayitlar) / len(kayitlar)
-        st.markdown(f"""
-<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
-  <div style="background:#f2ede6;border:1px solid #e8dfd4;border-radius:12px;padding:16px;
-              text-align:center;border-top:3px solid #8b7355">
-    <div style="font-size:10px;color:#7a6a5a;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Toplam Seyahat</div>
-    <div style="font-size:28px;font-weight:900;color:#2c2416;line-height:1">{len(kayitlar)}</div>
-  </div>
-  <div style="background:#ede8e0;border:1px solid #e0d4c4;border-radius:12px;padding:16px;
-              text-align:center;border-top:3px solid #d4976a">
-    <div style="font-size:10px;color:#7a6a5a;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Toplam Harcama</div>
-    <div style="font-size:20px;font-weight:900;color:#2c2416;line-height:1">{toplam:,.0f}</div>
-    <div style="font-size:10px;color:#7a6a5a">TL</div>
-  </div>
-  <div style="background:#eef0eb;border:1px solid #dde5d8;border-radius:12px;padding:16px;
-              text-align:center;border-top:3px solid #9eaa8f">
-    <div style="font-size:10px;color:#7a6a5a;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.4px">Ort. Tasarruf</div>
-    <div style="font-size:28px;font-weight:900;color:#3d6b3d;line-height:1">%{ort:.1f}</div>
-  </div>
+            # ── Gezi sonrası geri bildirim → hafıza → sonraki planın profil ajanı ──
+            _pid = record.get("_id")
+            if _pid is not None:
+                _plan_notlari = [n for n in memory.notlar(st.session_state.username, limit=200)
+                                 if n.get("plan_id") == _pid]
+                _sn = next((n for n in _plan_notlari if n["tur"] == "seyahat_notu"), None)
+                _gb = [n for n in _plan_notlari if n["tur"] == "geri_bildirim"]
+                with st.expander("⭐ Yorumun bekleniyor" if not _gb else "✅ Yorumun kaydedildi"):
+                    if _sn and _sn.get("metin"):
+                        _kisa = _sn["metin"] if len(_sn["metin"]) <= 260 else _sn["metin"][:257].rsplit(" ", 1)[0] + "…"
+                        st.markdown(f'<div class="yorum-notu">📝 {_html.escape(_kisa)}</div>', unsafe_allow_html=True)
+                    for _g in _gb:
+                        _parca = [("★" * int(_g["puan"]) + "☆" * (5 - int(_g["puan"]))) if _g.get("puan") else ""]
+                        if _g.get("begenilen"):
+                            _parca.append(f"👍 {_html.escape(_g['begenilen'])}")
+                        if _g.get("begenilmeyen"):
+                            _parca.append(f"👎 {_html.escape(_g['begenilmeyen'])}")
+                        if _g.get("metin"):
+                            _parca.append(f"<i>{_html.escape(_g['metin'])}</i>")
+                        st.markdown('<div style="font-size:13px;color:#3a2f24;margin-bottom:6px">'
+                                    + " · ".join(p for p in _parca if p) + "</div>", unsafe_allow_html=True)
+                    with st.form(f"gb_form_{_pid}", clear_on_submit=True):
+                        st.markdown('<div style="font-size:13px;color:#6b5a48;margin-bottom:4px">'
+                                    'Geziden döndün mü? Yorumun bir sonraki planını şekillendirir.</div>',
+                                    unsafe_allow_html=True)
+                        _puan = st.radio("Gezi nasıl geçti?", [1, 2, 3, 4, 5], index=3, horizontal=True,
+                                         format_func=lambda x: "★" * x, key=f"gb_puan_{_pid}")
+                        _c1, _c2 = st.columns(2)
+                        _beg = _c1.text_input("Neleri sevdin?", placeholder="Örn: müzeler, sahil yürüyüşü",
+                                              key=f"gb_beg_{_pid}")
+                        _begm = _c2.text_input("Neleri sevmedin?", placeholder="Örn: kalabalık çarşılar",
+                                               key=f"gb_begm_{_pid}")
+                        _not = st.text_input("Eklemek istediğin bir şey var mı?", key=f"gb_not_{_pid}",
+                                             placeholder="Örn: Sabahları erken başlamak iyi geldi")
+                        if st.form_submit_button("Kaydet", type="primary"):
+                            memory.not_ekle(st.session_state.username, _not, "geri_bildirim",
+                                            record.get("destination"), _pid, _puan, _beg, _begm)
+                            st.success("Teşekkürler! Bir sonraki planın bunu dikkate alacak.")
+                            st.rerun()
+
+    # ── Gittiğim yerler ──────────────────────────────────────────────────
+    st.markdown("#### 📍 Gittiğim yerler")
+    st.caption("Bu yerler yeni planlarda tekrar önerilmez.")
+    if _ziy4:
+        _grup4 = {}
+        for z in _ziy4:
+            _grup4.setdefault(z["sehir"] or "?", []).append(z)
+        _gcols = st.columns(min(3, len(_grup4)))
+        for _gi, (_sehir4, _liste4) in enumerate(_grup4.items()):
+            with _gcols[_gi % len(_gcols)]:
+                _yerler4 = list(dict.fromkeys(z["yer"] for z in _liste4))
+                _li4 = "".join(f'<li>{_html.escape(y)}</li>' for y in _yerler4[:12])
+                _fazla = f'<div style="font-size:11px;color:#a89580">+{len(_yerler4) - 12} yer daha</div>' if len(_yerler4) > 12 else ""
+                st.markdown(f"""
+<div style="background:#fffefb;border:1px solid #e8dfd4;border-radius:12px;padding:12px 16px;margin-bottom:10px">
+  <div style="display:flex;justify-content:space-between"><b style="color:#2c2416">{_html.escape(str(_sehir4))}</b>
+  <span style="font-size:11px;color:#8b7355;font-weight:700">{len(_yerler4)} yer</span></div>
+  <ul style="font-size:12px;color:#4a3f35;margin:6px 0 0;padding-left:18px;line-height:1.6">{_li4}</ul>{_fazla}
 </div>""", unsafe_allow_html=True)
+
+    with st.expander("➕ Sistem dışında yaptığım bir geziyi ekle"):
+        with st.form("elle_gecmis", clear_on_submit=True):
+            _e1, _e2 = st.columns([1, 2])
+            _es = _e1.text_input("Şehir", placeholder="Örn: İstanbul")
+            _ey = _e2.text_input("Gittiğin yerler (virgülle)", placeholder="Örn: Ayasofya, Galata Kulesi, Kapalıçarşı")
+            _ec1, _ec2 = st.columns(2)
+            _ebeg = _ec1.text_input("Neleri sevdin?", placeholder="Örn: müzeler, deniz kenarı")
+            _ebegm = _ec2.text_input("Neleri sevmedin?", placeholder="Örn: kalabalık çarşılar")
+            if st.form_submit_button("Seyahatlerime ekle"):
+                _yerler = [y.strip() for y in _ey.split(",") if y.strip()]
+                if _es.strip() and _yerler:
+                    memory.ziyaretleri_kaydet(_u, _es.strip(), _yerler, None)
+                    if _ebeg.strip() or _ebegm.strip():
+                        memory.not_ekle(_u, "", "geri_bildirim", _es.strip(), None, None, _ebeg, _ebegm)
+                    st.success(f"{len(_yerler)} yer eklendi.")
+                    st.rerun()
+                else:
+                    st.warning("Şehir ve en az bir yer gir.")
+
+    # ── Notlarım ────────────────────────────────────────────────────────
+    _gorunur = [n for n in _not4 if (n.get("metin") or n.get("begenilen") or n.get("begenilmeyen"))]
+    if _gorunur:
+        st.markdown("#### 📝 Notlarım")
+        _tur_ad = {"serbest_not": ("✍️", "Plana yazdığın not"), "seyahat_notu": ("📝", "Sana özel seyahat notu"),
+                   "geri_bildirim": ("⭐", "Gezi sonrası yorumun")}
+        for _n in _gorunur[:8]:
+            _ik, _ad = _tur_ad.get(_n["tur"], ("•", _n["tur"]))
+            _detay = []
+            if _n.get("puan"):
+                _detay.append(f"{_n['puan']}/5")
+            if _n.get("begenilen"):
+                _detay.append(f"👍 {_html.escape(_n['begenilen'])}")
+            if _n.get("begenilmeyen"):
+                _detay.append(f"👎 {_html.escape(_n['begenilmeyen'])}")
+            _metin = _html.escape((_n.get("metin") or "")[:400])
+            st.markdown(f"""
+<div style="display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #ece4d9">
+  <div style="font-size:18px">{_ik}</div>
+  <div style="flex:1"><div style="font-size:11px;color:#9a8a7a">{_ad} · {_html.escape(str(_n.get('sehir') or ''))} · {_n['tarih']}</div>
+  <div style="font-size:12.5px;color:#3a2f24;line-height:1.6">{_metin}</div>
+  <div style="font-size:12px;color:#6b5a48">{' · '.join(_detay)}</div></div>
+</div>""", unsafe_allow_html=True)
+
+    # ── Verilerim ───────────────────────────────────────────────────────
+    with st.expander("🔒 Verilerim"):
+        _yol4 = memory.json_disa_aktar(_u)
+        st.caption("Planların, gittiğin yerler, notların ve tahmini harcamaların bu cihazda saklanır. "
+                   "Tamamını tek bir dosya olarak indirebilirsin.")
+        if _yol4 and os.path.exists(_yol4):
+            with open(_yol4, encoding="utf-8") as _f4:
+                st.download_button("⬇ Verilerimi indir (JSON)", _f4.read(), file_name=os.path.basename(_yol4),
+                                   mime="application/json")

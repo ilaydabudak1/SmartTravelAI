@@ -3,3 +3,12 @@ python-dotenv>=1.0.0
 Pillow>=10.0.0
 numpy>=1.26.0
 fpdf2>=2.7.0
+requests>=2.31.0
+pydeck>=0.9.0
+# Ajanların dil modelleri (anahtar yoksa ajanlar kural tabanlı modda çalışır)
+anthropic>=1.0.0
+google-genai>=1.0.0
+# Deney ve testler
+scipy>=1.11.0
+pytest>=8.0.0
+# İsteğe bağlı: benchmark.py referans çözümü için  →  pip install ortools

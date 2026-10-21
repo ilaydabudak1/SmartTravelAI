@@ -8,7 +8,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
-VERI_KLASORU = "data"
+VERI_KLASORU = os.getenv("SMARTTRAVEL_DATA", "data")   # testler/demo için ayrı klasör verilebilir
 DB_PATH      = os.path.join(VERI_KLASORU, "smarttravel.db")
 USERS_JSON   = os.path.join(VERI_KLASORU, "users.json")
 MALIYET_JSON = os.path.join(VERI_KLASORU, "maliyet_gecmisi.json")
@@ -213,11 +213,12 @@ def update_user_mbti(username: str, mbti_type: str):
         c.execute("UPDATE users SET mbti_type=? WHERE username=?", (mbti_type, username))
 
 
-def save_travel_history(username: str, travel_record: dict):
+def save_travel_history(username: str, travel_record: dict) -> int:
+    """Planı kaydeder ve travel_plans.id değerini döner (hafıza katmanı bu id ile bağlanır)."""
     saved_at = datetime.now().strftime("%Y-%m-%d %H:%M")
     record_to_store = {**travel_record, "saved_at": saved_at}
     with _conn() as c:
-        c.execute(
+        cur = c.execute(
             """INSERT INTO travel_plans
                (username, destination, start_date, end_date, duration_days, group_size,
                 transport, budget_category, mbti_type, estimated_cost, plan_summary,
@@ -235,10 +236,11 @@ def save_travel_history(username: str, travel_record: dict):
                 travel_record.get("mbti_type"),
                 travel_record.get("estimated_cost"),
                 travel_record.get("plan_ozeti", ""),
-                json.dumps(record_to_store, ensure_ascii=False),
+                json.dumps(record_to_store, ensure_ascii=False, default=str),
                 saved_at,
             ),
         )
+        return cur.lastrowid
 
 
 def get_travel_plans(username: str) -> list:
@@ -284,21 +286,6 @@ def maliyet_kaydet(kullanici, sehir, gun, kat, standart, ozel, tasarruf):
             (kullanici, sehir, gun, kat, standart, ozel, round(tasarruf, 2),
              datetime.now().strftime("%Y-%m-%d %H:%M")),
         )
-
-
-def maliyet_gecmisi_oku() -> list:
-    with _conn() as c:
-        rows = c.execute("SELECT * FROM maliyet_gecmisi ORDER BY id ASC").fetchall()
-    return [
-        {
-            "tarih": r["tarih"], "kullanici": r["username"], "sehir": r["sehir"],
-            "gun_sayisi": r["gun_sayisi"], "butce_kategorisi": r["butce_kategorisi"],
-            "standart_plan_tl": r["standart_plan_tl"],
-            "ozellestirilmis_plan_tl": r["ozellestirilmis_plan_tl"],
-            "tasarruf_yuzdesi": r["tasarruf_yuzdesi"],
-        }
-        for r in rows
-    ]
 
 
 # ---------------------------------------------------------------------------
