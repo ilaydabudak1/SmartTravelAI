@@ -1032,6 +1032,24 @@ if cur == 0:
   </div>
 </div>""", unsafe_allow_html=True)
 
+        _yol = st.radio("Nasıl devam etmek istersin?", ["📝 Testi çöz (20 soru)", "✅ Tipimi zaten biliyorum"],
+                        horizontal=True, label_visibility="collapsed", key="mbti_yol")
+        if _yol.startswith("✅"):
+            with st.container(border=True):
+                st.markdown("**Tipini seç** — resmi MBTI ya da başka bir testten öğrendiğin dört harfli tip.")
+                _tip = st.selectbox("Tipin", MBTIAgent.TIPLER, index=None, placeholder="Örn: ENFP",
+                                    format_func=lambda t: f"{t} — {MBTIAgent.ARKETIPLER.get(t, '')}")
+                if st.button("Bu tiple devam et", type="primary", disabled=_tip is None):
+                    with st.spinner("Profiliniz oluşturuluyor..."):
+                        res = MBTIAgent().tip_profili(_tip)
+                    st.session_state.mbti_report    = res.get("description", "")
+                    st.session_state.user_data["mbti_type"] = res["mbti_type"]
+                    st.session_state.mbti_archetype = res.get("archetype", "Gezgin")
+                    st.session_state.mbti_completed = True
+                    update_user_mbti(st.session_state.username, res["mbti_type"])
+                    go_tab(0); st.rerun()
+            st.stop()
+
         _sorular = MBTIAgent.SORULAR
         _bolumler = [
             ("Bölüm 1 / 2", "Kişilik &amp; Motivasyon", "Sorular 1 – 10", "#4f46e5", "#eef2ff", "#c7d2fe", "#1e1b4b", 0),

@@ -133,51 +133,78 @@ Senin için en iyi seyahat deneyimi kişisel değerlerinle örtüşen destinasyo
 <h3>Öneri</h3>
 <p>Tercihlerine göre oluşturulan rotanda {pref_str} gibi deneyimler seni bekliyor.</p>"""
 
-    # 20 soru × 2 seçenek. Her boyut (E/I, S/N, T/F, J/P) için 5 soru, dönüşümlü sıralı.
-    # A seçeneği ilk kutba, B seçeneği ikinci kutba 1 puan verir; 5 tek sayı olduğu için beraberlik olmaz.
-    # (soru, A metni, B metni, A kutbu, B kutbu)
+    # 20 soru × 2 seçenek: her soruda birbirine zıt iki ifade, kullanıcı kendine yakın olanı seçer
+    # (OEJTS ve MBTI Form M'deki zorunlu seçim biçimi örnek alınmıştır; maddeler yazarlarındır).
+    # Her boyut (E/I, S/N, T/F, J/P) için 5 soru, dönüşümlü sıralı. Şık dengesi: her boyutta
+    # A şıkkı 3 soruda bir kutba, 2 soruda diğer kutba aittir — hep "A" seçmek sonucu tek yöne itmez.
+    # Sorular 1–10 genel kişilik, 11–20 seyahat davranışı. Boyut başına 5 (tek) soru → beraberlik olmaz.
+    # (soru, A ifadesi, B ifadesi, A kutbu, B kutbu)
     SORULAR = [
-        ("Hafta sonu ideal planın hangisi?",
-         "Kalabalık bir arkadaş grubuyla eğlenmek", "Sakin bir kafede ya da evde dinlenmek", "E", "I"),
-        ("Bir şehri gezerken odağın nereye gider?",
-         "Somut tarihi anıtlara ve müzelere", "Şehrin atmosferine ve bana hissettirdiklerine", "S", "N"),
-        ("Gezide beklenmedik bir sorun çıkarsa?",
-         "Hemen mantıklı bir çözüm üretirim", "Önce herkesin moralini düşünürüm", "T", "F"),
-        ("Bavulunu nasıl hazırlarsın?",
-         "Günler öncesinden, listeyle", "Son gece, aklıma geldikçe", "J", "P"),
-        ("Seyahatte enerjini ne yükseltir?",
-         "Yeni insanlarla tanışmak", "Kendi başıma keşfetmek", "E", "I"),
-        ("Bir destinasyon seçerken seni ne çeker?",
-         "Görülecek yerlerin somut listesi", "Hikâyesi ve keşfedilmemiş köşeleri", "S", "N"),
-        ("Restorana nasıl karar verirsin?",
-         "Puanları ve fiyatları karşılaştırarak", "Atmosferine ve içgüdüme göre", "T", "F"),
-        ("Gezide zamanını nasıl yönetirsin?",
-         "Dakik, her saat planlı", "Esnek, akışına bırakarak", "J", "P"),
-        ("Gittiğin yerde yerel halkla ilişkin nasıldır?",
-         "Hemen sohbet başlatırım", "Gözlemlemeyi konuşmaya tercih ederim", "E", "I"),
-        ("Müze gezerken nasıl ilerlersin?",
-         "Eserlerin tarihî bilgilerini okurum", "Eserlerin ardındaki hikâyeyi hayal ederim", "S", "N"),
-        ("Yol arkadaşınla rota konusunda anlaşamazsan?",
-         "Mantıklı gerekçelerle ikna ederim", "Onun mutlu olacağı seçeneği seçerim", "T", "F"),
-        ("Gezi programın nasıl görünür?",
-         "Saat saat planlı", "Sadece ilk gün planlı, gerisi akışta", "J", "P"),
-        ("Seyahatte akşamlarını nasıl geçirirsin?",
-         "Canlı meydanlarda ve kalabalık mekânlarda", "Sakin bir köşede kitap ya da günlükle", "E", "I"),
-        ("Keşif tarzın hangisi?",
-         "Bilinen, denenmiş popüler rotalar", "Haritada olmayan ara sokaklar", "S", "N"),
-        ("Seyahat bütçen aşılırsa ne yaparsın?",
-         "Harcama kalemlerini analiz edip keserim", "Anıların değeri paradan büyük, takılmam", "T", "F"),
-        ("Rezervasyonlarını ne zaman yaparsın?",
-         "Haftalar önceden garantiye alırım", "Vardığım yerde bakarım", "J", "P"),
-        ("Seyahat anılarını nasıl paylaşırsın?",
-         "Anında sosyal medyada paylaşırım", "Kendime saklar, günlüğüme yazarım", "E", "I"),
-        ("Senin için seyahatin asıl anlamı nedir?",
-         "Görülmesi gerekenleri görmek", "Dünyaya bakışımı dönüştürmek", "S", "N"),
-        ("Otel seçerken neye bakarsın?",
-         "Konum, fiyat ve puan karşılaştırmasına", "Samimi ve sıcak hissettirmesine", "T", "F"),
-        ("Dönüş günü yaklaşırken?",
-         "Her şey planlandığı gibi tamamlanmıştır", "Son dakika sürprizlerine hâlâ açığım", "J", "P"),
+        # ── Bölüm 1: Kişilik & motivasyon ──────────────────────────────────
+        ("Yeni bir durumla karşılaştığında",
+         "Karışmadan önce gözlemlemeyi ve analiz etmeyi tercih ederim.",
+         "Hemen dahil olur, yaparak ve konuşarak öğrenirim.", "I", "E"),
+        ("Bilgiye nasıl güvenirsin?",
+         "Somut gerçeklere ve kanıtlanmış yöntemlere güvenirim.",
+         "Olasılıklara, sezgilerime ve yeni fikirlere güvenirim.", "S", "N"),
+        ("Önemli bir karar verirken",
+         "Bilinçli kararlar almak için veri toplar ve analiz ederim.",
+         "Kararın insanlara ve değerlerime nasıl dokunacağına bakarım.", "T", "F"),
+        ("İşlerini nasıl yürütürsün?",
+         "Seçeneklerimi açık tutmayı, son ana kadar esnek kalmayı severim.",
+         "İşleri planlayıp erkenden karara bağlamayı severim.", "P", "J"),
+        ("Yorucu bir günün ardından",
+         "Arkadaşlarla buluşmak beni dinlendirir.",
+         "Yalnız kalıp kendi başıma vakit geçirmek beni dinlendirir.", "E", "I"),
+        ("Neye odaklanırsın?",
+         "Ayrıntılardan çok büyük resmi ve anlamı görmeye odaklanırım.",
+         "Büyük resimden çok ayrıntılara ve somut adımlara odaklanırım.", "N", "S"),
+        ("Bir tartışmada",
+         "Doğruyu ortaya koymak, uyumu korumaktan daha önemlidir.",
+         "Uyumu korumak, haklı çıkmaktan daha önemlidir.", "T", "F"),
+        ("Gündelik düzenin",
+         "Yapılacaklar listem olmadan kendimi düzensiz hissederim.",
+         "Listeler beni kısıtlar; işleri akışına göre hallederim.", "J", "P"),
+        ("İlgini daha çok ne çeker?",
+         "Fikirlerden çok insanlarla ve sosyal etkileşimle ilgilenirim.",
+         "Sosyal etkileşimden çok fikir ve kavramlarla ilgilenirim.", "E", "I"),
+        ("Yeni bir şey öğrenirken",
+         "Önce pratik örneklerini ve nasıl uygulandığını görmek isterim.",
+         "Önce ardındaki teoriyi ve bağlantıları anlamak isterim.", "S", "N"),
+        # ── Bölüm 2: Turizm kimliği & keşif tarzı ───────────────────────────
+        ("Otel seçerken",
+         "Samimi ve sıcak hissettirmesine bakarım.",
+         "Konum, fiyat ve puanları karşılaştırırım.", "F", "T"),
+        ("Gezi programın",
+         "Saat saat planlıdır.",
+         "Sadece ilk gün planlıdır, gerisi akışta.", "J", "P"),
+        ("Seyahatte akşamlarını",
+         "Sakin bir köşede kitap ya da günlükle geçiririm.",
+         "Canlı meydanlarda ve kalabalık mekânlarda geçiririm.", "I", "E"),
+        ("Keşif tarzın",
+         "Bilinen, denenmiş popüler rotaları tercih ederim.",
+         "Haritada olmayan ara sokakları keşfetmeyi tercih ederim.", "S", "N"),
+        ("Gezide beklenmedik bir sorun çıkarsa",
+         "Önce mantıklı bir çözüm üretirim.",
+         "Önce herkesin moralini düşünürüm.", "T", "F"),
+        ("Konaklama konusunda",
+         "Yer bulmayı vardığım yere bırakmak bana heyecan verir.",
+         "Rezervasyonlarımı haftalar önceden garantiye alırım.", "P", "J"),
+        ("Gittiğin yerde yerel halkla",
+         "Hemen sohbet başlatırım.",
+         "Konuşmaktan çok gözlemlemeyi severim.", "E", "I"),
+        ("Bir şehri değerlendirirken",
+         "Hikâyesi ve atmosferi, görülecek yerler listesinden önemlidir.",
+         "Önce en bilinen somut yapılarını görmek isterim.", "N", "S"),
+        ("Yol arkadaşınla",
+         "Onun mutlu olması, rotanın verimli olmasından önemlidir.",
+         "Rotanın verimli olması, herkesin keyfine göre esnemekten önemlidir.", "F", "T"),
+        ("Bavulunu",
+         "Günler öncesinden, listeyle hazırlarım.",
+         "Son gece, aklıma geldikçe hazırlarım.", "J", "P"),
     ]
+
+    TIPLER = [a + b + c + d for a in "EI" for b in "SN" for c in "TF" for d in "JP"]
 
     def _determine_mbti(self, answers) -> str:
         """answers: 20 elemanlı "A"/"B" listesi ya da {"q1": "A", ...} sözlüğü.
@@ -191,7 +218,11 @@ Senin için en iyi seyahat deneyimi kişisel değerlerinle örtüşen destinasyo
         return "".join(x if puan[x] > puan[y] else y for x, y in (("E", "I"), ("S", "N"), ("T", "F"), ("J", "P")))
 
     def analyze(self, answers) -> dict:
-        mbti = self._determine_mbti(answers)
+        return self.tip_profili(self._determine_mbti(answers))
+
+    def tip_profili(self, mbti: str) -> dict:
+        """Testten ya da kullanıcının zaten bildiği tipten profil raporu üretir."""
+        mbti = mbti.upper()
         archetype = self.ARKETIPLER.get(mbti, "Özgün Gezgin")
         preferences = self.SEYAHAT_TERCIHLERI.get(mbti, ["kültürel mekanlar", "doğa", "mutfak turu"])
         rapor = self._ai_rapor(mbti, archetype, preferences)
