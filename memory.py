@@ -176,10 +176,6 @@ def ziyaret_edilenler(username: str, sehir: str | None = None) -> list:
     return rows
 
 
-def daha_once_gidildi_mi(username: str, yer: str, sehir: str | None = None) -> bool:
-    return any(ayni_yer_mi(yer, r["yer"]) for r in ziyaret_edilenler(username, sehir))
-
-
 def plan_hafizasini_sil(username: str, plan_id: int):
     """Bir plan silindiğinde ona bağlı ziyaret/maliyet/algoritma/not kayıtlarını da siler."""
     with db._conn() as c:
@@ -228,35 +224,6 @@ def algoritma_kaydet(username: str, sehir: str, gun: int, durak_sayisi: int,
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (username, plan_id, sehir, gun, durak_sayisi, kazanan,
              json.dumps(sade, ensure_ascii=False), _simdi()))
-
-
-def algoritma_ozeti(username: str | None = None) -> dict:
-    """Algoritma başına kazanma sayısı, ortalama sapma ve süre."""
-    q = "SELECT kazanan, sonuc_json FROM algoritma_istatistikleri"
-    args: list = []
-    if username:
-        q += " WHERE username=?"
-        args.append(username)
-    with db._conn() as c:
-        rows = c.execute(q, args).fetchall()
-    ozet: dict = {}
-    for r in rows:
-        try:
-            sonuc = json.loads(r["sonuc_json"])
-        except Exception:
-            continue
-        for algo, s in sonuc.items():
-            o = ozet.setdefault(algo, {"kosu": 0, "kazanma": 0, "sapma_top": 0.0, "sure_top": 0.0})
-            o["kosu"] += 1
-            o["sapma_top"] += float(s.get("sapma_yuzde", 0))
-            o["sure_top"] += float(s.get("sure_ms", 0))
-        if r["kazanan"] in ozet:
-            ozet[r["kazanan"]]["kazanma"] += 1
-    for o in ozet.values():
-        n = max(1, o["kosu"])
-        o["ort_sapma_yuzde"] = round(o.pop("sapma_top") / n, 2)
-        o["ort_sure_ms"] = round(o.pop("sure_top") / n, 2)
-    return ozet
 
 
 # ---------------------------------------------------------------------------

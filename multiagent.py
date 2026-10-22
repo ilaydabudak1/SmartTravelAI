@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
+import google_maps
 import memory
 import poi_data
 import routing
@@ -414,11 +415,13 @@ class PlanAjani(Ajan):
         self._havuz_cache: dict = {}
 
     def havuz(self, sehir: str) -> tuple[list, str]:
-        """Yerel bilgi tabanı → OpenStreetMap sırasıyla aday havuzu."""
+        """Yerel bilgi tabanı → Google Maps (Places) → OpenStreetMap sırasıyla aday havuzu."""
         if sehir not in self._havuz_cache:
             yerel = poi_data.yerel_poi(sehir)
             if yerel:
                 self._havuz_cache[sehir] = (yerel, "yerel bilgi tabanı")
+            elif (gm := google_maps.yer_ara(sehir, poi_data.sehir_koordinati(sehir))):
+                self._havuz_cache[sehir] = (gm, "Google Maps")
             else:
                 osm = poi_data.osm_poi(sehir)
                 self._havuz_cache[sehir] = (osm, "OpenStreetMap") if osm else ([], "yok")
@@ -850,7 +853,7 @@ class Orkestrator:
     def planla(self, istek: dict, username: str) -> dict:
         t0 = time.perf_counter()
         istek = _istek_dogrula(istek)
-        self._yaz("bilgi", f"Model ataması: " + ", ".join(f"{r}→{m}" for r, m in self.llm.durum().items()))
+        self._yaz("bilgi", "Model ataması: " + ", ".join(f"{r}→{m}" for r, m in self.llm.durum().items()))
 
         # Hedef bir ülke/bölge ise birkaç günlük plan tek bir üs şehirde kurulur
         hedef_notu = None

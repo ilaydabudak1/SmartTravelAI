@@ -20,6 +20,7 @@ from plan_render import (
     gunluk_html, seyahat_notu_karti, KATEGORI_ETIKET,
     plan_ozet_html, butce_dokum_html, restoran_listesi_html, yedek_yerler_html, ipuclari_html,
 )
+import google_maps
 import hazirlik
 from poi_data import PILOT_DESTINASYONLAR
 
@@ -51,10 +52,6 @@ st.markdown("""
 .st-key-tatil_listesi .tl-ust-etiket { font-size:10px; font-weight:800; color:#8b7355; text-transform:uppercase; letter-spacing:.7px; }
 .st-key-tatil_listesi .tl-baslik { font-size:22px; font-weight:800; color:#2c2416; letter-spacing:-.3px; margin-top:3px; }
 .st-key-tatil_listesi .tl-alt { font-size:12px; color:#7a6a5a; margin-top:2px; }
-.st-key-tatil_listesi .tl-yuzde { text-align:right; min-width:120px; }
-.st-key-tatil_listesi .tl-yuzde b { font-size:20px; color:#2c2416; }
-.st-key-tatil_listesi .tl-cubuk { background:#efe8de; border-radius:4px; height:5px; margin-top:6px; }
-.st-key-tatil_listesi .tl-cubuk div { background:#8b7355; height:5px; border-radius:4px; }
 .st-key-tatil_listesi .tl-kart-baslik { display:flex; align-items:center; gap:9px; margin-bottom:8px; }
 .st-key-tatil_listesi .tl-ikon { width:28px; height:28px; border-radius:8px; display:flex; align-items:center;
     justify-content:center; font-size:14px; flex-shrink:0; }
@@ -202,15 +199,6 @@ st.markdown("""
 }
 .stRadio > div > label:has(input:checked) p { color: #3730a3 !important; font-weight: 700 !important; }
 
-/* ── MBTI test kartları ── */
-.mbti-q-card { position: relative; }
-.mbti-q-card [data-testid="stVerticalBlockBorderWrapper"] {
-    border-radius: 12px !important; border-color: #e8dfd4 !important;
-    transition: border-color 0.15s, box-shadow 0.15s;
-}
-.mbti-q-card [data-testid="stVerticalBlockBorderWrapper"]:has(input:checked) {
-    border-color: #4f46e5 !important; box-shadow: 0 0 0 1px rgba(79,70,229,0.12);
-}
 hr { border-color: #e5e7eb !important; margin: 1rem 0 !important; }
 
 /* ── page_header tutarlılığı ── */
@@ -578,8 +566,6 @@ if not st.session_state.logged_in:
 # SOL SİDEBAR
 # ════════════════════════════════════════════════════════════════════════════
 
-if st.session_state.current_tab not in range(5):     # eski 6 sekmeli sürümden kalan oturum
-    st.session_state.current_tab = 4
 cur          = st.session_state.current_tab
 mbti_type    = st.session_state.user_data.get("mbti_type", "")
 mbti_arch    = st.session_state.mbti_archetype
@@ -601,7 +587,7 @@ NAV_ITEMS = [
 
 with st.sidebar:
     # Logo
-    st.markdown(f"""
+    st.markdown("""
 <div style="padding:22px 18px 14px">
   <div style="display:flex;align-items:center;gap:10px">
     <div style="width:36px;height:36px;background:linear-gradient(135deg,#6366f1,#8b5cf6);
@@ -637,8 +623,6 @@ with st.sidebar:
     # ── Profil kartı ──────────────────────────────────────────────────────────
     _uname_init = st.session_state.username[:1].upper() if st.session_state.username else "?"
     if mbti_type:
-        _mbti_colors = {"NT":"#6d28d9","NF":"#0891b2","SJ":"#ca8a04","SP":"#ea580c"}
-        _dim_clr = next((v for k,v in _mbti_colors.items() if mbti_type[2:4] in (k,k[::-1])), "#8b7355")
         st.markdown(f"""
 <div style="padding:0 12px 10px">
   <div style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.09);
@@ -724,13 +708,11 @@ with st.sidebar:
 </div>""", unsafe_allow_html=True)
 
     # Çıkış butonu
-    st.markdown('<div style="padding:0 8px 16px">', unsafe_allow_html=True)
     if st.button("Çıkış Yap", key="logout_btn", use_container_width=True):
         invalidate_session(st.session_state.get("_session_token"))
         for k in list(st.session_state.keys()):
             del st.session_state[k]
         st.rerun()
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -806,13 +788,7 @@ if cur == 0:
             for i in range(4)
         )
 
-        # Chip'leri hero (koyu bg) için önceden hesapla
-        _trait_chips_light = "".join(
-            f'<span style="background:#f2ede6;border:1px solid #e0d5c8;border-radius:99px;'
-            f'padding:4px 12px;font-size:11px;font-weight:600;color:#5a4a3a;'
-            f'display:inline-block;margin:3px 2px">{t}</span>'
-            for t in _traits
-        )
+        # Chip'leri hero (koyu zemin) için önceden hesapla
         _trait_chips_dark = "".join(
             f'<span style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.18);'
             f'border-radius:99px;padding:4px 12px;font-size:11px;font-weight:600;'
@@ -856,7 +832,7 @@ if cur == 0:
                   font-size:11.5px;color:rgba(255,255,255,0.42);display:flex;align-items:center;gap:8px">
         <span style="width:6px;height:6px;border-radius:50%;background:#9eaa8f;
                      display:inline-block;flex-shrink:0"></span>
-        Rota, restoran ve maliyet ajanları bu profile göre çalışıyor
+        Planların bu profile göre hazırlanır
       </div>
     </div>
   </div>
@@ -909,7 +885,6 @@ if cur == 0:
             _report_raw = st.session_state.mbti_report
             st.html(f"""
 <div style="font-family:'Inter',sans-serif;margin-bottom:16px">
-  <!-- Başlık satırı -->
   <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">
     <div style="width:36px;height:36px;border-radius:10px;flex-shrink:0;
                 background:linear-gradient(135deg,#d4976a,#8b7355);
@@ -927,7 +902,6 @@ if cur == 0:
                 font-weight:700;color:#8b7355">{mbti}</div>
   </div>
 
-  <!-- Rapor içerik alanı -->
   <div style="background:#fffefb;border:1px solid #e8dfd4;border-radius:16px;
               padding:24px 28px;position:relative;overflow:hidden">
     <div style="position:absolute;top:0;left:0;width:4px;height:100%;
@@ -1056,7 +1030,6 @@ if cur == 0:
             ("Bölüm 2 / 2", "Turizm Kimliği &amp; Keşif Tarzı", "Sorular 11 – 20", "#059669", "#f0fdf4", "#a7f3d0", "#064e3b", 10),
         ]
         with st.form("mbti_form"):
-            st.markdown('<div class="mbti-q-card">', unsafe_allow_html=True)
             cevaplar = [None] * len(_sorular)
             for kol, (etk, baslik, alt, renk, zemin, kenar, koyu, bas) in zip(st.columns(2, gap="large"), _bolumler):
                 with kol:
@@ -1071,7 +1044,6 @@ if cur == 0:
                         with st.container(border=True):
                             cevaplar[i] = st.radio(f"{i + 1}. {soru}", [f"A) {a_metni}", f"B) {b_metni}"],
                                                    index=None, key=f"mbti_ab_q{i + 1}")
-            st.markdown('</div>', unsafe_allow_html=True)
 
             extra = st.text_area("Opsiyonel Not", placeholder="Örnek: Vejetaryenim, fotoğraf çekmekten hoşlanıyorum...")
 
@@ -1173,7 +1145,6 @@ elif cur == 1:
                 "Serbest not", label_visibility="collapsed", height=110, max_chars=1500,
                 placeholder="Kendi cümlelerinle yaz — testten önceliklidir. Örn: Kalabalık yerleri sevmem, "
                             "müze ve sanat galerilerine bayılırım. Vejetaryenim, akşamları sakin bir yer isterim.")
-            kullanici_adi = st.session_state.username
 
             submitted = st.form_submit_button("✈️ Planımı Oluştur", type="primary")
 
@@ -1190,19 +1161,11 @@ elif cur == 1:
 
             if not errors:
                 gun_farki = (bit - bas).days + 1
+                # Plan sayfasının başlık kartı için gereken alanlar
                 t_data = {
-                    "destination":          hedef.strip(),
-                    "budget":               butce,
-                    "transport":            ulasim_sec,
-                    "transport_preference": ulasim_sec.lower(),
-                    "group_size":           int(kisi),
-                    "start_date":           str(bas),
-                    "end_date":             str(bit),
-                    "duration_days":        gun_farki,
-                    "butce_kategorisi":     butce_kat,
-                    "kullanici_adi":        kullanici_adi,
-                    "mbti_type":            st.session_state.user_data.get("mbti_type", "ENFP"),
-                    "serbest_not":          serbest_not.strip(),
+                    "destination": hedef.strip(), "start_date": str(bas), "end_date": str(bit),
+                    "group_size": int(kisi), "transport": ulasim_sec,
+                    "mbti_type": st.session_state.user_data.get("mbti_type", "ENFP"),
                 }
                 istek = {
                     "sehir": hedef.strip(), "gun": gun_farki, "kisi": int(kisi),
@@ -1211,7 +1174,7 @@ elif cur == 1:
                     "ulasim": ulasim_sec, "baslangic": str(bas),
                 }
 
-                # Ajanlar çalışırken her pano mesajı canlı olarak ekrana düşer
+                # Ajanlar çalışırken kullanıcıya sade ilerleme adımları gösterilir
                 _ADIMLAR = {"hafiza": "Geçmiş gezilerin hatırlanıyor", "profil": "Seni tanıyoruz",
                             "plan": "Sana uygun yerler seçiliyor", "elestirmen": "Öneriler kontrol ediliyor",
                             "rota": "En kısa rota hesaplanıyor", "maliyet": "Bütçen hesaplanıyor"}
@@ -1249,14 +1212,12 @@ elif cur == 1:
                     "destination":       hedef.strip(),
                     "duration_days":     gun_farki,
                     "estimated_cost":    kis["toplam"],
-                    "transport_details": "",
                     "html_report":       gunluk_html(sonuc),
                     "start_date": str(bas), "end_date": str(bit),
                     "group_size": int(kisi), "transport": ulasim_sec,
                     "butce_kategorisi": butce_kat,
                     "sonuc": sonuc,
                 }
-                plan["plan_metni"] = plan["html_report"]
                 st.session_state.travel_history.append(plan)
                 st.session_state.last_plan      = plan
                 st.session_state.last_t_data    = t_data
@@ -1304,7 +1265,7 @@ elif cur == 1:
   </div>
 </div>""", unsafe_allow_html=True)
 
-        # ── Hafıza paneli: ajanlara ne geri beslenecek? ───────────────────────
+        # ── Hafıza paneli ──────────────────────────────────────────────────────
         _hz = memory.hafiza_baglami(st.session_state.username)
         _sehirler = _hz["ziyaret_edilen_yerler"]
         _sehir_satir = "".join(
@@ -1334,7 +1295,6 @@ elif cur == 1:
 </div>""", unsafe_allow_html=True)
 
 
-
 # ════════════════════════════════════════════════════════════════════════════
 # SEKME 2 — PLAN SONUCU
 # ════════════════════════════════════════════════════════════════════════════
@@ -1353,10 +1313,16 @@ elif cur == 2:
         bit2        = t_d2.get("end_date", "")
         kisi2       = t_d2.get("group_size", 1)
         trans2      = t_d2.get("transport", "")
-        mbti2       = t_d2.get("mbti_type", t_d2.get("user_profile", {}).get("mbti_type", ""))
+        mbti2       = t_d2.get("mbti_type", "")
         days2       = plan.get("duration_days", 1)
         cost2       = float(plan.get("estimated_cost") or 0)
-        html_report = plan.get("html_report") or plan.get("plan_metni") or plan.get("transport_details", "")
+        html_report = plan.get("html_report", "")
+        if plan.get("sonuc"):
+            # Gün kartları kayıtlı plan verisinden yeniden üretilir — eski planlar da güncel görünümü alır
+            try:
+                html_report = gunluk_html(plan["sonuc"])
+            except Exception:
+                pass
 
         # ── Landmark carousel — base64 (kota hatası olsa da çalışır) ─────────
         _WIKI_HDR = {"User-Agent": "SmartTravelAI/1.0 (edu; ilaydanudak@icloud.com)"}
@@ -1485,7 +1451,7 @@ elif cur == 2:
 </div>
 """, unsafe_allow_html=True)
 
-        # ── Çok ajanlı plan: seyahat notu, bütçe durumu, harita ───────────────
+        # ── Seyahat notu, plan özeti, harita ──────────────────────────────────
         _sonuc2 = plan.get("sonuc")
         if _sonuc2:
             if _sonuc2.get("hedef_notu"):
@@ -1495,11 +1461,12 @@ elif cur == 2:
             if _sonuc2.get("haric_tutulan"):
                 st.caption("🔁 Hafızadan dolayı tekrar önerilmeyen yerler: "
                            + ", ".join(dict.fromkeys(_sonuc2["haric_tutulan"]))[:400])
+            _merkez = _sonuc2["rota"]["merkez"]
+            _gunler2 = _sonuc2["rota"]["gunler"]
             try:
                 import pydeck as _pdk
                 _renkler = [[139, 115, 85], [212, 151, 106], [79, 107, 79], [79, 70, 229],
                             [190, 75, 120], [8, 145, 178], [202, 138, 4]]
-                _merkez = _sonuc2["rota"]["merkez"]
                 _yollar, _noktalar = [], []
                 for _g in _sonuc2["rota"]["gunler"]:
                     _r = _renkler[(_g["gun"] - 1) % len(_renkler)]
@@ -1525,9 +1492,14 @@ elif cur == 2:
                     tooltip={"text": "{ad}"},
                 ), height=380)
                 st.caption("Haritadaki numaralar ziyaret sırasıdır; her gün ayrı renkte. "
-                           "Harita: © OpenStreetMap katkıcıları, © CARTO")
+                           "Altlık: © OpenStreetMap katkıcıları, © CARTO")
             except Exception:
                 pass
+            _baglanti = " · ".join(f'<a href="{_html.escape(google_maps.rota_linki(_merkez, g["duraklar"]))}" '
+                                    f'target="_blank" style="color:#8b7355;font-weight:600">Gün {g["gun"]}</a>'
+                                    for g in _gunler2)
+            st.markdown(f'<div style="font-size:12px;color:#7a6a5a;margin:-4px 0 14px">🗺️ Rotayı Google Maps’te aç: '
+                        f'{_baglanti}</div>', unsafe_allow_html=True)
 
         # ── Carousel ──────────────────────────────────────────────────────────
         DEST_ACIKLAMA = {
@@ -1684,25 +1656,15 @@ elif cur == 2:
 
         # ── Plan HTML — gün tabları ───────────────────────────────────────────
         if html_report:
-            # aktivite-kart border renklerini uygula
-            clean = html_report
-            for _tip, _renk in [("gezi","#8b7355"),("yemek","#d4976a"),
-                                  ("konaklama","#9eaa8f"),("genel","#b5a99a")]:
-                for _q in (f'data-type="{_tip}"', f"data-type='{_tip}'"):
-                    clean = clean.replace(
-                        _q, f'data-type="{_tip}" style="border-left:4px solid {_renk}"'
-                    )
-
-            style_m     = _re.search(r'<style>.*?</style>', clean, _re.DOTALL)
+            # Kart kenar renkleri plan_render.CSS içinde tanımlı
+            style_m     = _re.search(r'<style>.*?</style>', html_report, _re.DOTALL)
             style_block = style_m.group(0) if style_m else ""
-            body_only   = _re.sub(r'<style>.*?</style>', '', clean, flags=_re.DOTALL).strip()
+            body_only   = _re.sub(r'<style>.*?</style>', '', html_report, flags=_re.DOTALL).strip()
             parcalar    = _re.split(r'(?=<div[^>]*class=["\']gun-baslik["\'])', body_only)
             gun_parcalari = [p for p in parcalar if "gun-baslik" in p]
 
             # ── Araç çubuğu: indir butonu (PDF, doğrudan masaüstüne) ─────────
-            plain_text = _re.sub(r'<[^>]+>', ' ', body_only)
-            plain_text = _re.sub(r'[ \t]{2,}', ' ', plain_text).strip()
-            col_ind, col_sp = st.columns([1.3, 4.7])
+            col_ind, _ = st.columns([1.3, 4.7])
             with col_ind:
                 if st.button("⬇ Planı İndir", key="plan_indir", use_container_width=True, type="primary"):
                     try:
@@ -1741,8 +1703,6 @@ elif cur == 2:
             else:
                 st.html(f"<style>body{{margin:0;padding:0}}</style>{style_block}"
                         f"<div class='plan-wrap'>{body_only}</div>")
-        else:
-            st.json(plan)
 
         # ── Planın devamı: bütçe, yeme-içme, yedek yerler, ipuçları ──────────
         if _sonuc2:
@@ -1759,7 +1719,7 @@ elif cur == 2:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# SEKME 3 — ACO & MALİYET
+# SEKME 3 — GEZİ HAZIRLIĞI
 # ════════════════════════════════════════════════════════════════════════════
 
 elif cur == 3:
@@ -1817,9 +1777,9 @@ elif cur == 3:
             """Tatil listesi: 3 sütunlu kategori kartları + Notlar (uygulamanın kart stilinde)."""
             with st.container(key="tatil_listesi"):
                 st.markdown(
-                    f'<div class="tl-ust"><div><div class="tl-ust-etiket">✈️ Tatil listesi</div>'
-                    f'<div class="tl-baslik">Her şey hazır, güzel anılar bizi bekliyor</div>'
-                    f'<div class="tl-alt">Planına, mevsime ve tercihlerine göre hazırlandı.</div></div></div>',
+                    '<div class="tl-ust"><div><div class="tl-ust-etiket">✈️ Tatil listesi</div>'
+                    '<div class="tl-baslik">Her şey hazır, güzel anılar bizi bekliyor</div>'
+                    '<div class="tl-alt">Planına, mevsime ve tercihlerine göre hazırlandı.</div></div></div>',
                     unsafe_allow_html=True)
 
                 def kart(anahtar, maddeler):
@@ -1866,11 +1826,11 @@ elif cur == 3:
         _gh = hazirlik.gunluk_harcama(_s3)
         _gunluk_ort = sum(r["Toplam"] for r in _gh) / max(1, len(_gh))
 
-        _t1, _t3 = st.tabs([f"📝 Tatil Listesi  {_biten}/{len(_tum_maddeler)}",
+        _t1, _t2 = st.tabs([f"📝 Tatil Listesi  {_biten}/{len(_tum_maddeler)}",
                             f"💳 Günlük harcama  ~{_gunluk_ort:,.0f} TL"])
         with _t1:
             _poster()
-        with _t3:
+        with _t2:
             st.caption("Kişi başı, gün gün tahmini cep harcaması (yemek, şehir içi ulaşım, giriş ücretleri).")
             _gk = st.columns(len(_gh)) if len(_gh) <= 4 else None
             for _gi, _r in enumerate(_gh):
@@ -1890,7 +1850,7 @@ elif cur == 3:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# SEKME 4 — GEÇMİŞİM
+# SEKME 4 — SEYAHATLERİM
 # ════════════════════════════════════════════════════════════════════════════
 
 elif cur == 4:
@@ -2053,7 +2013,7 @@ elif cur == 4:
   <div style="display:flex;gap:6px;flex-wrap:wrap">{chips_html}</div>
 </div>""", unsafe_allow_html=True)
 
-            col_gor, col_sil, col_bos = st.columns([1.7, 0.7, 3.6])
+            col_gor, col_sil, _ = st.columns([1.7, 0.7, 3.6])
             with col_gor:
                 if record.get("full_plan"):
                     if st.button("🔍 Planı Görüntüle", key=f"gecmis_goruntule_{h_idx}"):
@@ -2062,10 +2022,8 @@ elif cur == 4:
                             "destination":      record.get("destination", ""),
                             "start_date":       start,
                             "end_date":         end,
-                            "duration_days":    dur,
                             "group_size":       kisi,
                             "transport":        trans,
-                            "butce_kategorisi": budget,
                             "mbti_type":        mbti,
                         }
                         go_tab(2)
@@ -2079,7 +2037,7 @@ elif cur == 4:
                         memory.plan_hafizasini_sil(st.session_state.username, record["_id"])
                     st.rerun()
 
-            # ── Gezi sonrası geri bildirim → hafıza → sonraki planın profil ajanı ──
+            # ── Gezi sonrası yorum → hafıza → sonraki plan ──
             _pid = record.get("_id")
             if _pid is not None:
                 _plan_notlari = [n for n in memory.notlar(st.session_state.username, limit=200)

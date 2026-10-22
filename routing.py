@@ -3,7 +3,7 @@
 # Sunumdaki dört adım:
 #   1) Mesafe   : Haversine (kuş uçuşu) mesafe matrisi
 #   2) Yarış    : NN, NN + 2-opt, KKO (Karınca Koloni) ve GA (Genetik Algoritma)
-#   3) Gerçek yol: OSRM / Google Maps ile yürüyüş mesafesi (ağ yoksa atlanır)
+#   3) Gerçek yol: Google Maps Routes API ile yürüyüş mesafesi (anahtar yoksa OSRM, ağ yoksa atlanır)
 #   4) Saatler  : VRPTW benzeri — açılış/kapanış saatine göre yeniden sıralama
 #
 # Tüm turlar KAPALI turdur (başladığın yere dön) ve 0. düğüm başlangıç noktasıdır
@@ -17,9 +17,10 @@ import math
 import os
 import random
 import time
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+
+import google_maps
 
 # ---------------------------------------------------------------------------
 # PARAMETRELER (Sunum, Tablo 1)
@@ -315,16 +316,15 @@ def gunlere_bol(noktalar: list, gun_sayisi: int) -> list:
 # ---------------------------------------------------------------------------
 
 def gercek_yol(noktalar: list, mod: str = "foot", timeout: float = 6.0) -> dict | None:
-    """Sıralı noktalar için gerçek yürüyüş/araç mesafesi ve süresi.
+    """Sıralı noktalar için gerçek yürüyüş mesafesi ve süresi.
 
-    Öncelik: GOOGLE_MAPS_API_KEY varsa Google Directions, yoksa açık kaynak OSRM.
+    Öncelik: GOOGLE_MAPS_API_KEY varsa Google Maps Routes API; yoksa açık kaynak OSRM.
     Ağ yoksa ya da SMARTTRAVEL_OFFLINE=1 ise None döner (kuş uçuşu kullanılır)."""
     if os.getenv("SMARTTRAVEL_OFFLINE") == "1" or len(noktalar) < 2:
         return None
-    gkey = os.getenv("GOOGLE_MAPS_API_KEY", "")
+    if google_maps.anahtar():
+        return google_maps.yol_tarifi(noktalar)
     try:
-        if gkey:
-            return _google_directions(noktalar, gkey, timeout)
         return _osrm(noktalar, mod, timeout)
     except Exception:
         return None
@@ -348,29 +348,6 @@ def _osrm(noktalar: list, mod: str, timeout: float) -> dict | None:
         "dakika": round(rota["duration"] / 60, 1),
         "bacaklar": [{"km": round(l["distance"] / 1000, 2), "dakika": round(l["duration"] / 60, 1)}
                      for l in rota.get("legs", [])],
-    }
-
-
-def _google_directions(noktalar: list, key: str, timeout: float) -> dict | None:
-    params = {
-        "origin": f"{noktalar[0]['lat']},{noktalar[0]['lon']}",
-        "destination": f"{noktalar[-1]['lat']},{noktalar[-1]['lon']}",
-        "mode": "walking", "key": key,
-    }
-    if len(noktalar) > 2:
-        params["waypoints"] = "|".join(f"{p['lat']},{p['lon']}" for p in noktalar[1:-1])
-    url = "https://maps.googleapis.com/maps/api/directions/json?" + urllib.parse.urlencode(params)
-    with urllib.request.urlopen(url, timeout=timeout) as r:
-        data = json.loads(r.read())
-    if data.get("status") != "OK":
-        return None
-    legs = data["routes"][0]["legs"]
-    return {
-        "kaynak": "Google Maps Directions",
-        "km": round(sum(l["distance"]["value"] for l in legs) / 1000, 2),
-        "dakika": round(sum(l["duration"]["value"] for l in legs) / 60, 1),
-        "bacaklar": [{"km": round(l["distance"]["value"] / 1000, 2),
-                      "dakika": round(l["duration"]["value"] / 60, 1)} for l in legs],
     }
 
 

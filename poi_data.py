@@ -4,8 +4,8 @@
 # şehir → gezi noktası (POI) ve restoran listeleri. Her POI:
 #   isim, lat, lon, kategori, sure_dk, acilis, kapanis, ucret_tl (yetişkin, tahmini), etiketler
 # Ücretler 2026 için yaklaşık değerlerdir (1 € ≈ 50 TL); gerçek fiyat değildir.
-# Listede olmayan şehirler için OpenStreetMap (Nominatim + Overpass) üzerinden
-# canlı POI çekilir.
+# Listede olmayan şehirler için Google Maps (Places API, anahtar varsa) ya da
+# OpenStreetMap üzerinden canlı POI çekilir.
 
 from __future__ import annotations
 

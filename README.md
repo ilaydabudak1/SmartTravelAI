@@ -17,9 +17,22 @@ streamlit run app.py
 |---|---|---|
 | `ANTHROPIC_API_KEY` | Profil ajanı **Claude Opus**, Plan/Eleştirmen ajanları **Claude Sonnet** | Gemini'ye düşer |
 | `GEMINI_API_KEY` | Maliyet ajanı **Gemini 2.5 Flash**; Claude yoksa diğer ajanların yedeği | Kural tabanlı mod |
-| `GOOGLE_MAPS_API_KEY` | Gerçek yürüyüş mesafesi (Directions) | Açık kaynak OSRM kullanılır |
+| `GOOGLE_MAPS_API_KEY` | Google Maps: gerçek yürüyüş mesafesi ve gerçek gezi noktaları | Açık kaynak servisler (OSRM, OpenStreetMap) kullanılır |
 | `SMARTTRAVEL_DATA` | Veri klasörü (varsayılan `data/`) | — |
 | `SMARTTRAVEL_OFFLINE=1` | Tüm ağ/LLM çağrılarını kapatır (testler) | — |
+
+### Google Maps anahtarı
+
+Google Cloud Console'da şu iki API'yi etkinleştirip anahtarı `.env` dosyasına
+`GOOGLE_MAPS_API_KEY=...` olarak ekleyin:
+
+| API | Ne için |
+|---|---|
+| Routes API | Günlük rotanın gerçek yürüyüş mesafesi ve süresi |
+| Places API (New) | Pilot olmayan şehirlerde gerçek gezi noktaları |
+
+"Harita" ve "Günün rotasını Google Maps'te aç" bağlantıları anahtar gerektirmez, her zaman Google Maps'e gider.
+Konum bulma (pilot olmayan şehirler) ücretsiz açık kaynak servisle yapılır.
 
 ## Mimari (sunum, slayt 15)
 
@@ -39,7 +52,8 @@ streamlit run app.py
 | Bütçe kısıtı ve müzakere | `Orkestrator._muzakere` |
 | Heterojen model seçimi | `llm.py` → `ROL_MODELLERI` |
 | Hafıza: 4 depo, tekrar önermeme, geri bildirim | `memory.py` |
-| Yedek bilgi tabanı / OpenStreetMap POI | `poi_data.py` |
+| Yedek bilgi tabanı (10 pilot destinasyon) | `poi_data.py` |
+| Google Maps (yol tarifi, konum, yer arama, harita) | `google_maps.py` |
 | 90 problemlik deney, Wilcoxon + Holm + Cohen d, eşit bütçe | `benchmark.py` |
 | Gezi hazırlığı: yapılacaklar, bavul listesi, günlük harcama | `hazirlik.py` |
 | Otomatik testler | `tests/` (`python -m pytest`) |

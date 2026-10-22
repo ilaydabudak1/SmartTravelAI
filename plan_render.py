@@ -7,8 +7,8 @@
 from __future__ import annotations
 
 import html
-import urllib.parse
 
+import google_maps
 from routing import ALGORITMA_ADLARI
 
 _E = html.escape
@@ -54,10 +54,8 @@ CSS = """<style>
 </style>"""
 
 
-def _harita_linki(p: dict) -> str:
-    if p.get("lat") is None:
-        return "https://www.openstreetmap.org/search?query=" + urllib.parse.quote(p.get("isim", ""))
-    return f"https://www.openstreetmap.org/?mlat={p['lat']}&mlon={p['lon']}#map=17/{p['lat']}/{p['lon']}"
+def _harita_linki(p: dict, sehir: str = "") -> str:
+    return p.get("google_uri") or google_maps.harita_linki(p, sehir)
 
 
 def _gun_etiketi(baslangic: str, g: int) -> str:
@@ -69,7 +67,7 @@ def _gun_etiketi(baslangic: str, g: int) -> str:
         return f"Gün {g}"
 
 
-def _restoran_karti(saat: str, etiket: str, r: dict | None, beslenme_notu: str) -> str:
+def _restoran_karti(saat: str, etiket: str, r: dict | None, beslenme_notu: str, sehir: str = "") -> str:
     if not r:
         return (f'<div class="aktivite-kart" data-type="yemek"><div class="saat-col">'
                 f'<div class="saat-txt">{saat}</div><div class="saat-alt">{etiket}</div></div>'
@@ -80,13 +78,14 @@ def _restoran_karti(saat: str, etiket: str, r: dict | None, beslenme_notu: str) 
     return (f'<div class="aktivite-kart" data-type="yemek"><div class="saat-col">'
             f'<div class="saat-txt">{saat}</div><div class="saat-alt">{etiket}</div></div>'
             f'<div class="icerik-col"><div class="mekan-adi">🍽️ {_E(r["isim"])} '
-            f'<a class="harita-btn" href="{_harita_linki(r)}" target="_blank">Harita</a></div>'
+            f'<a class="harita-btn" href="{_harita_linki(r, sehir)}" target="_blank">Harita</a></div>'
             f'<p class="neden">{_E(r.get("mutfak", ""))} {fiyat} · son duraktan {r.get("mesafe_km", 0)} km'
             f'{(" · " + _E(beslenme_notu)) if beslenme_notu else ""}</p></div></div>')
 
 
 def gunluk_html(sonuc: dict) -> str:
     rota, istek = sonuc["rota"], sonuc["istek"]
+    sehir = istek.get("sehir", "")
     restoran = {r["gun"]: r for r in sonuc.get("restoran_plani", [])}
     parcalar = [CSS, '<div class="plan-wrap">']
     for g in rota["gunler"]:
@@ -102,6 +101,8 @@ def gunluk_html(sonuc: dict) -> str:
         if g.get("vrptw_duzeltme"):
             chipler.append(f'<span class="chip">🕒 saatlere göre {g["vrptw_duzeltme"]} düzeltme</span>')
         chipler.append(f'<span class="chip">🏁 bitiş {g["cizelge"]["bitis"]}</span>')
+        chipler.append(f'<a class="harita-btn" href="{_E(google_maps.rota_linki(rota["merkez"], duraklar))}" '
+                       f'target="_blank">🗺️ Günün rotasını Google Maps’te aç</a>')
         parcalar.append(f'<div class="gun-ozet">{"".join(chipler)}</div>')
 
         r = restoran.get(g["gun"], {})
@@ -109,7 +110,7 @@ def gunluk_html(sonuc: dict) -> str:
         sira = 0
         for olay in g["cizelge"]["plan"]:
             if olay.get("ogle"):
-                parcalar.append(_restoran_karti(olay["varis"], "Öğle", r.get("ogle"), bes))
+                parcalar.append(_restoran_karti(olay["varis"], "Öğle", r.get("ogle"), bes, sehir))
                 continue
             p = duraklar[sira]
             sira += 1
@@ -125,11 +126,11 @@ def gunluk_html(sonuc: dict) -> str:
                 f'<div class="sira-no">{sira}</div></div>'
                 f'<div class="icerik-col"><div class="mekan-adi">{_E(p["isim"])} '
                 f'<span class="chip">{KATEGORI_ETIKET.get(p.get("kategori"), _E(str(p.get("kategori"))))}</span>'
-                f'<a class="harita-btn" href="{_harita_linki(p)}" target="_blank">Harita</a></div>'
+                f'<a class="harita-btn" href="{_harita_linki(p, sehir)}" target="_blank">Harita</a></div>'
                 f'<p class="neden">{_E(p.get("neden") or "")}</p>{yol}{uyari}</div></div>')
         # Akşam yemeği en erken 19:00; gün daha geç biterse bitişte
         aksam_saat = max(g["cizelge"]["bitis"], "19:00")
-        parcalar.append(_restoran_karti(aksam_saat, "Akşam", r.get("aksam"), bes))
+        parcalar.append(_restoran_karti(aksam_saat, "Akşam", r.get("aksam"), bes, sehir))
     parcalar.append("</div>")
     return "".join(parcalar)
 
@@ -258,7 +259,7 @@ def restoran_listesi_html(sonuc: dict) -> str:
                       f'<span style="min-width:96px;color:#9a8a7a">Gün {r["gun"]} · {etiket}</span>'
                       f'<span style="flex:1;color:#2c2416"><b>{_E(ogun["isim"])}</b> '
                       f'<span style="color:#9a8a7a">{_E(ogun.get("mutfak", ""))} {_FIYAT.get(ogun.get("fiyat"), "")}</span></span>'
-                      f'<a href="{_harita_linki(ogun)}" target="_blank" style="color:#8b7355;font-size:11.5px">harita</a></div>')
+                      f'<a href="{_harita_linki(ogun, sonuc["istek"].get("sehir", ""))}" target="_blank" style="color:#8b7355;font-size:11.5px">harita</a></div>')
     if not satir:
         return ""
     return f'<div style="{_KART}"><div style="{_BASLIK}">🍽️ Yeme-içme önerileri</div>{satir}</div>'
@@ -276,7 +277,7 @@ def yedek_yerler_html(sonuc: dict) -> str:
                  f'<div style="font-size:11px;color:#9a8a7a;margin:3px 0 6px">{KATEGORI_ETIKET.get(p.get("kategori"), "")} · '
                  f'{ucret} · ~{p.get("sure_dk", 60)} dk</div>'
                  f'<div style="font-size:12px;color:#4a3f35;line-height:1.55">{_E(p.get("neden") or "")}</div>'
-                 f'<a href="{_harita_linki(p)}" target="_blank" style="font-size:11.5px;color:#8b7355">haritada gör</a></div>')
+                 f'<a href="{_harita_linki(p, sonuc["istek"].get("sehir", ""))}" target="_blank" style="font-size:11.5px;color:#8b7355">haritada gör</a></div>')
     return (f'<div style="{_KART}"><div style="{_BASLIK}">✨ Vaktin kalırsa</div>'
             f'<div style="font-size:12px;color:#6b5a48;margin-bottom:10px">Profiline uyan ama programa sığmayan yerler.</div>'
             f'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">{kart}</div></div>')

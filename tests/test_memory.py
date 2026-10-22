@@ -19,8 +19,7 @@ def test_ziyaret_kaydi_ve_sorgu():
     memory.ziyaretleri_kaydet("ali", "Ankara", ["Anıtkabir"], 2)
     assert len(memory.ziyaret_edilenler("ali")) == 3
     assert {z["yer"] for z in memory.ziyaret_edilenler("ali", "istanbul")} == {"Ayasofya", "Galata Kulesi"}
-    assert memory.daha_once_gidildi_mi("ali", "ayasofya", "İstanbul")
-    assert not memory.daha_once_gidildi_mi("veli", "Ayasofya")
+    assert memory.ziyaret_edilenler("veli") == []
 
 
 def test_plan_silinince_hafiza_temizlenir():
@@ -31,7 +30,7 @@ def test_plan_silinince_hafiza_temizlenir():
     assert memory.notlar("ali") == []
 
 
-def test_dort_depo_ve_json_anlik_goruntu(gecici_db):
+def test_dort_depo_ve_json_anlik_goruntu():
     memory.profil_kaydet("ali", {"ilgi_alanlari": ["muze"]})
     memory.ziyaretleri_kaydet("ali", "İzmir", ["Kordon"], 3)
     memory.algoritma_kaydet("ali", "İzmir", 1, 4, "aco", {"aco": {"km": 3.1, "sapma_yuzde": 0, "sure_ms": 50, "tur": [0, 1]},
@@ -44,8 +43,6 @@ def test_dort_depo_ve_json_anlik_goruntu(gecici_db):
     assert veri["seyahat_gecmisi"]["ziyaret_edilen_yerler"][0]["yer"] == "Kordon"
     assert veri["algoritma_istatistikleri"][0]["kazanan"] == "aco"
     assert veri["maliyet_kayitlari"][0]["kisisel_tl"] == 9000
-    ozet = memory.algoritma_ozeti("ali")
-    assert ozet["aco"]["kazanma"] == 1 and ozet["nn"]["ort_sapma_yuzde"] == 12.9
 
 
 def test_hafiza_baglami_geri_bildirimleri_icerir():

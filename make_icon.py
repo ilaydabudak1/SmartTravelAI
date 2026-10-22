@@ -38,7 +38,6 @@ def make_frame(size):
     pw      = 95 * s    # uçak yarı uzunluğu
     wing_w  = 70 * s    # kanat açıklığı
     wing_h  = 22 * s
-    tail_w  = 36 * s
     tail_h  = 14 * s
     body_h  = 13 * s
 
