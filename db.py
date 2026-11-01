@@ -1,4 +1,4 @@
-# db.py — SQLite tabanlı kalıcılık katmanı: kullanıcılar, oturumlar, seyahat planları, maliyet geçmişi
+# db.py — SQLite tabanlı kalıcılık katmanı: kullanıcılar, seyahat planları, maliyet geçmişi
 
 import os
 import json
@@ -6,7 +6,7 @@ import hashlib
 import secrets
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 
 VERI_KLASORU = os.getenv("SMARTTRAVEL_DATA", "data")   # testler/demo için ayrı klasör verilebilir
 DB_PATH      = os.path.join(VERI_KLASORU, "smarttravel.db")
@@ -14,7 +14,6 @@ USERS_JSON   = os.path.join(VERI_KLASORU, "users.json")
 MALIYET_JSON = os.path.join(VERI_KLASORU, "maliyet_gecmisi.json")
 
 PBKDF2_ITERASYON     = 260_000   # OWASP 2023 önerisi (PBKDF2-HMAC-SHA256)
-OTURUM_GECERLILIK_GUN = 7
 
 
 @contextmanager
@@ -44,15 +43,6 @@ def init_db():
             )
         """)
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)")
-
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                token_hash TEXT PRIMARY KEY,
-                username TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL
-            )
-        """)
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS travel_plans (
@@ -107,51 +97,6 @@ def _verify_password(password: str, stored_hash: str, salt: str, algo: str) -> b
 
 
 # ---------------------------------------------------------------------------
-# OTURUM BELİRTEÇLERİ (SESSION TOKENS)
-# ---------------------------------------------------------------------------
-
-def _token_hash(token: str) -> str:
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def create_session(username: str) -> str:
-    """Ham token'ı SADECE burada, bir kez döner — DB'ye yalnızca hash'i yazılır."""
-    token = secrets.token_urlsafe(32)
-    now = datetime.now()
-    expires = now + timedelta(days=OTURUM_GECERLILIK_GUN)
-    with _conn() as c:
-        c.execute(
-            "INSERT OR REPLACE INTO sessions (token_hash, username, created_at, expires_at) "
-            "VALUES (?, ?, ?, ?)",
-            (_token_hash(token), username, now.isoformat(), expires.isoformat()),
-        )
-    return token
-
-
-def validate_session(token: str | None) -> str | None:
-    if not token:
-        return None
-    with _conn() as c:
-        row = c.execute(
-            "SELECT username, expires_at FROM sessions WHERE token_hash=?",
-            (_token_hash(token),),
-        ).fetchone()
-        if not row:
-            return None
-        if datetime.fromisoformat(row["expires_at"]) < datetime.now():
-            c.execute("DELETE FROM sessions WHERE token_hash=?", (_token_hash(token),))
-            return None
-        return row["username"]
-
-
-def invalidate_session(token: str | None):
-    if not token:
-        return
-    with _conn() as c:
-        c.execute("DELETE FROM sessions WHERE token_hash=?", (_token_hash(token),))
-
-
-# ---------------------------------------------------------------------------
 # KULLANICI YÖNETİMİ
 # ---------------------------------------------------------------------------
 
@@ -173,16 +118,16 @@ def register_user(username: str, password: str, email: str = "") -> tuple[bool, 
     return True, "Kayıt başarılı!"
 
 
-def login_user(username: str, password: str) -> tuple[bool, str, str | None]:
+def login_user(username: str, password: str) -> tuple[bool, str]:
     with _conn() as c:
         row = c.execute(
             "SELECT username, password_hash, salt, hash_algo FROM users WHERE username=?",
             (username,),
         ).fetchone()
         if not row:
-            return False, "Kullanıcı adı bulunamadı.", None
+            return False, "Kullanıcı adı bulunamadı."
         if not _verify_password(password, row["password_hash"], row["salt"], row["hash_algo"]):
-            return False, "Şifre hatalı.", None
+            return False, "Şifre hatalı."
         if row["hash_algo"] != "pbkdf2_sha256":
             # Doğru parola girildi — kullanıcı fark etmeden modern hash'e yükselt
             # (eski kayıtlar salt'sız düz SHA-256 idi, zorla parola sıfırlatmadan geçiş).
@@ -191,8 +136,7 @@ def login_user(username: str, password: str) -> tuple[bool, str, str | None]:
                 "UPDATE users SET password_hash=?, salt=?, hash_algo='pbkdf2_sha256' WHERE username=?",
                 (new_hash, new_salt, username),
             )
-    token = create_session(username)
-    return True, "Giriş başarılı!", token
+    return True, "Giriş başarılı!"
 
 
 def get_user_profile(username: str) -> dict:

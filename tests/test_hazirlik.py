@@ -58,3 +58,17 @@ def test_hazirlik_notu_saklanir():
     assert memory.hazirlik_not_oku("ali", "k1") == "Pasaport fotokopisi"
     memory.hazirlik_not_kaydet("ali", "k1", "")
     assert memory.hazirlik_not_oku("ali", "k1") == ""
+
+
+def test_hava_kodlari_ve_cevrimdisi():
+    import hava
+    assert hava.aciklama(61) == "hafif yağmur" and hava.aciklama(0) == "açık" and hava.aciklama(999) == "değişken"
+    assert hava.simdiki_hava(39.77, 30.52) is None          # SMARTTRAVEL_OFFLINE=1
+
+
+def test_ilerleme_paneli():
+    html = plan_render.ilerleme_paneli_html(52, "Ajan 2 — plan & eleştirmen diyaloğu (5 yer seçiliyor)",
+                                            [("Eskişehir için hava durumu alınıyor", "12.9°C, hafif yağmur"),
+                                             ("Ajan 1 — kişilik profili çıkarılıyor", "")])
+    assert "Ajanlar çalışıyor" in html and "width:52%" in html and "12.9°C, hafif yağmur" in html
+    assert "<script" not in plan_render.ilerleme_paneli_html(10, "<script>x</script>", [])

@@ -325,3 +325,29 @@ def ipuclari_html(sonuc: dict) -> str:
     li = "".join(f'<li style="margin-bottom:7px">{_E(t)}</li>' for t in liste)
     return (f'<div style="{_KART}"><div style="{_BASLIK}">💡 Sana özel ipuçları</div>'
             f'<ul style="margin:0;padding-left:18px;font-size:12.5px;color:#3a2f24;line-height:1.6">{li}</ul></div>')
+
+
+# ---------------------------------------------------------------------------
+# Plan oluşturulurken ajan ilerleme paneli
+# ---------------------------------------------------------------------------
+
+def ilerleme_paneli_html(yuzde: int, adim: str, kayit: list, durum: str = "calisiyor") -> str:
+    """Başlık + ilerleme çubuğu + o anki adım + koyu kayıt kutusu (her satır bir ajan adımı)."""
+    baslik = {"calisiyor": "Ajanlar çalışıyor…", "bitti": "Planın hazır ✓",
+              "hata": "Plan oluşturulamadı"}.get(durum, "Ajanlar çalışıyor…")
+    cubuk = "#dc2626" if durum == "hata" else "linear-gradient(90deg,#4f46e5,#7c3aed)"
+    satirlar = "".join(
+        f'<div style="margin-bottom:4px"><span style="color:#a5b4fc">•</span> {_E(s[0])}'
+        + (f'<div style="padding-left:16px;color:#a5b4fc">{_E(s[1])}</div>' if len(s) > 1 and s[1] else "")
+        + "</div>" for s in kayit)
+    return f"""
+<div style="background:#fffefb;border:1px solid #e8dfd4;border-radius:14px;padding:18px 20px;
+            box-shadow:0 2px 10px rgba(44,36,22,.06);font-family:Inter,sans-serif;margin:8px 0 14px">
+  <div style="font-size:17px;font-weight:800;color:#2c2416">{baslik}</div>
+  <div style="background:#f2ede6;border-radius:6px;height:7px;margin:12px 0 10px;overflow:hidden">
+    <div style="width:{max(3, min(100, yuzde))}%;height:7px;border-radius:6px;background:{cubuk};
+                transition:width .4s ease"></div></div>
+  <div style="font-size:12.5px;font-weight:600;color:#4338ca;margin-bottom:10px">{_E(adim)}</div>
+  <div style="background:linear-gradient(135deg,#1a1a2e,#16213e 60%,#0f3460);color:#e5e7eb;border-radius:10px;padding:12px 14px;
+              font-family:Consolas,'Courier New',monospace;font-size:12px;line-height:1.55">{satirlar}</div>
+</div>"""

@@ -12,16 +12,18 @@ from agents import MBTIAgent
 from db import (
     register_user, login_user, get_user_profile,
     update_user_mbti, save_travel_history, delete_travel_plan,
-    invalidate_session,
 )
 import memory
 from multiagent import Orkestrator, hafizaya_kaydet
 from plan_render import (
     gunluk_html, seyahat_notu_karti, KATEGORI_ETIKET,
     plan_ozet_html, butce_dokum_html, restoran_listesi_html, yedek_yerler_html, ipuclari_html,
+    ilerleme_paneli_html,
 )
 import google_maps
+import hava
 import hazirlik
+import poi_data
 from poi_data import PILOT_DESTINASYONLAR
 
 st.set_page_config(
@@ -217,7 +219,6 @@ _defaults = {
     "travel_history": [], "last_plan": None,
     "last_t_data": None, "current_tab": 0,
     "_profil_yuklendi": False,
-    "_session_token": None,
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -519,11 +520,10 @@ def auth_screen():
                 username = st.text_input("Kullanıcı Adı", placeholder="kullaniciadi")
                 password = st.text_input("Şifre", type="password", placeholder="••••••")
                 if st.form_submit_button("Giriş Yap", use_container_width=True):
-                    ok, msg, token = login_user(username.strip(), password)
+                    ok, msg = login_user(username.strip(), password)
                     if ok:
                         st.session_state.logged_in    = True
                         st.session_state.username     = username.strip()
-                        st.session_state._session_token = token
                         profile = get_user_profile(username.strip())
                         saved_mbti = profile.get("mbti_type", "")
                         if saved_mbti:
@@ -709,7 +709,6 @@ with st.sidebar:
 
     # Çıkış butonu
     if st.button("Çıkış Yap", key="logout_btn", use_container_width=True):
-        invalidate_session(st.session_state.get("_session_token"))
         for k in list(st.session_state.keys()):
             del st.session_state[k]
         st.rerun()
@@ -1174,32 +1173,66 @@ elif cur == 1:
                     "ulasim": ulasim_sec, "baslangic": str(bas),
                 }
 
-                # Ajanlar çalışırken kullanıcıya sade ilerleme adımları gösterilir
-                _ADIMLAR = {"hafiza": "Geçmiş gezilerin hatırlanıyor", "profil": "Seni tanıyoruz",
-                            "plan": "Sana uygun yerler seçiliyor", "elestirmen": "Öneriler kontrol ediliyor",
-                            "rota": "En kısa rota hesaplanıyor", "maliyet": "Bütçen hesaplanıyor"}
-                _gorulen = []
-                with st.status("✈️ Planın hazırlanıyor…", expanded=True) as durum_kutusu:
-                    def _canli(m):
-                        adim = _ADIMLAR.get(m.gonderen)
-                        if adim and adim not in _gorulen:
-                            if _gorulen:
-                                durum_kutusu.write(f"✓ {_gorulen[-1]}")
-                            _gorulen.append(adim)
-                            durum_kutusu.update(label=f"{adim}…")
-                    try:
-                        sonuc = Orkestrator(dinleyici=_canli).planla(istek, st.session_state.username)
-                    except Exception as e:
-                        durum_kutusu.update(label="Plan oluşturulamadı", state="error")
-                        if isinstance(e, (RuntimeError, ValueError)):      # beklenen durum: sade mesaj
-                            st.warning(str(e), icon="🧭")
-                        else:
-                            st.error("Plan oluşturulurken beklenmeyen bir sorun oluştu. Lütfen tekrar dene.")
-                            import traceback
-                            with st.expander("Teknik detay"):
-                                st.code(traceback.format_exc())
-                        st.stop()
-                    durum_kutusu.update(label="✅ Planın hazır!", state="complete", expanded=False)
+                # Ajanlar çalışırken ilerleme paneli: çubuk + o anki adım + adım kaydı
+                _panel = st.empty()
+                _ilerleme = {"yuzde": 4, "adim": "Başlatılıyor…", "kayit": []}
+
+                def _ciz(durum="calisiyor"):
+                    _panel.markdown(ilerleme_paneli_html(_ilerleme["yuzde"], _ilerleme["adim"],
+                                                         _ilerleme["kayit"], durum), unsafe_allow_html=True)
+
+                def _adim(yuzde, metin, alt=""):
+                    _ilerleme.update(yuzde=yuzde, adim=metin)
+                    _ilerleme["kayit"].append((metin, alt))
+                    _ciz()
+
+                # Ülke yazıldıysa (ör. İspanya) hava, planın kurulacağı şehirden alınır
+                _hava_sehri = poi_data.hedef_coz(hedef.strip())["sehir"] or hedef.strip()
+                _konum = poi_data.sehir_koordinati(_hava_sehri)
+                _hava = hava.simdiki_hava(_konum["lat"], _konum["lon"]) if _konum else None
+                _adim(8, f"{_hava_sehri} için hava durumu alınıyor",
+                      f"{_hava['sicaklik']}°C, {_hava['durum']}" if _hava else "hava bilgisi alınamadı")
+
+                _goruldu = set()
+
+                def _canli(m):
+                    if m.gonderen == "hafiza" and "hafiza" not in _goruldu:
+                        _goruldu.add("hafiza")
+                        _adim(16, "Hafıza — geçmiş geziler hatırlanıyor", m.icerik)
+                    elif m.gonderen == "profil" and "profil" not in _goruldu:
+                        _goruldu.add("profil")
+                        _adim(30, "Ajan 1 — kişilik profili çıkarılıyor")
+                    elif m.gonderen == "plan" and m.tur == "istek" and m.veri.get("adaylar") is not None:
+                        _adim(52, f"Ajan 2 — plan & eleştirmen diyaloğu ({len(m.veri['adaylar'])} yer seçiliyor)")
+                    elif m.gonderen == "elestirmen" and m.tur == "ret":
+                        _ilerleme["kayit"].append((f"Eleştirmen {len(m.veri.get('reddedilen', []))} öneriyi geri gönderdi",
+                                                   "uygun olmayanlar yeniden seçiliyor"))
+                        _ciz()
+                    elif m.gonderen == "rota" and "rota" not in _goruldu:
+                        _goruldu.add("rota")
+                        _adim(74, "Ajan 3 — rota optimizasyonu (NN, 2-opt, KKO, GA)")
+                    elif m.gonderen == "maliyet" and "maliyet" not in _goruldu:
+                        _goruldu.add("maliyet")
+                        _adim(88, "Ajan 4 — maliyet tahmini ve bütçe kontrolü")
+                    elif m.gonderen == "maliyet" and m.icerik.startswith("Müzakere turu"):
+                        _ilerleme["kayit"].append(("Bütçe müzakeresi", m.icerik.split(":", 1)[-1].strip()[:90]))
+                        _ciz()
+
+                try:
+                    sonuc = Orkestrator(dinleyici=_canli).planla(istek, st.session_state.username)
+                except Exception as e:
+                    _ilerleme["adim"] = "Plan oluşturulamadı"
+                    _ciz("hata")
+                    if isinstance(e, (RuntimeError, ValueError)):      # beklenen durum: sade mesaj
+                        st.warning(str(e), icon="🧭")
+                    else:
+                        st.error("Plan oluşturulurken beklenmeyen bir sorun oluştu. Lütfen tekrar dene.")
+                        import traceback
+                        with st.expander("Teknik detay"):
+                            st.code(traceback.format_exc())
+                    st.stop()
+                _ilerleme.update(yuzde=100, adim="Planın hazır — plan sayfası açılıyor")
+                _ciz("bitti")
 
                 kis = sonuc["maliyet"]["kisisel"]["kalemler"]
                 # Ülke yazıldıysa plan seçilen şehirde kurulur: "Barcelona (İspanya)"
